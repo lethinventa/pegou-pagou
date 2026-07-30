@@ -9,6 +9,8 @@ import {
   Clock,
   HelpCircle,
   LogOut,
+  Minus,
+  Plus,
   ScanSearch,
   Search,
   ShieldCheck,
@@ -50,7 +52,14 @@ const PRESENCE_AREA_FRACTION = 0.06;
 // abaixo é um chute razoável, precisa validar com fotos reais dos produtos.
 const LOCAL_MATCH_THRESHOLD = 0.85;
 const GEMINI_COOLDOWN_MS = 5000; // no máx. 1 chamada real à Gemini a cada 5s
-const LOCK_AFTER_ADD_MS = 4000;
+
+// Proteção contra reconhecimento duplicado: só confirma um produto depois do MESMO
+// resultado aparecer em análises consecutivas seguidas (evita adicionar 2x por causa
+// de uma leitura isolada estranha). Depois de confirmado, trava novos reconhecimentos
+// até detectar que o produto realmente saiu de cena — nunca um timer cego, porque o
+// produto pode continuar na frente da câmera depois que um timer fixo acabaria.
+const CONFIRMATION_STREAK_REQUIRED = 2;
+const REMOVAL_GRACE_MS = 1000; // tempo sem detectar presença pra considerar "retirado"
 
 // Carrinho sem dono até o "Finalizar compra": se ficar parado tempo demais, mais vale
 // limpar sozinho do que arriscar misturar o consumo de duas pessoas na mesma sessão.
@@ -58,7 +67,7 @@ const INACTIVITY_WARNING_MS = 3 * 60 * 1000;
 const INACTIVITY_CLEAR_COUNTDOWN_S = 30;
 
 type CameraStatus = "starting" | "ready" | "unavailable";
-type ScanState = "scanning" | "identifying" | "locked";
+type ScanState = "scanning" | "identifying" | "awaiting_removal";
 type PresenceModelStatus = "loading" | "ready" | "error";
 
 export function ScanScreen({ people, products }: { people: Person[]; products: Product[] }) {
@@ -73,6 +82,15 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   const lastActivityRef = useRef(0);
   const hasGreetedRef = useRef(false);
   const sessionStartRef = useRef(0);
+  // Candidato a confirmação: mesmo product_id precisa se repetir CONFIRMATION_STREAK_REQUIRED
+  // vezes seguidas antes de virar uma adição de verdade no carrinho.
+  const candidateRef = useRef<{ productId: string; streak: number }>({ productId: "", streak: 0 });
+  // Marca a última vez que algo foi detectado na câmera — usado pra saber quando o
+  // produto confirmado realmente saiu de cena (em vez de um timer fixo).
+  const lastPresenceAtRef = useRef(0);
+  // Fallback só usado se o detector local de presença não estiver disponível: sem ele
+  // não dá pra saber se o produto foi retirado, então cai num tempo fixo degradado.
+  const awaitingRemovalSinceRef = useRef(0);
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("starting");
   const [presenceModelStatus, setPresenceModelStatus] = useState<PresenceModelStatus>("loading");
@@ -153,9 +171,18 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     [products]
   );
 
-  const removeFromCart = useCallback((cartItemId: string) => {
+  const decreaseQuantity = useCallback((productId: string) => {
     lastActivityRef.current = Date.now();
-    setCart((prev) => prev.filter((item) => item.id !== cartItemId));
+    setCart((prev) => {
+      const index = prev.findIndex((item) => item.product_id === productId);
+      if (index === -1) return prev;
+      return [...prev.slice(0, index), ...prev.slice(index + 1)];
+    });
+  }, []);
+
+  const removeProductGroup = useCallback((productId: string) => {
+    lastActivityRef.current = Date.now();
+    setCart((prev) => prev.filter((item) => item.product_id !== productId));
   }, []);
 
   function openFinishModal() {
@@ -229,16 +256,41 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     return canvas.toDataURL("image/jpeg", 0.8).split(",")[1] ?? null;
   }, []);
 
+  // Retorna true quando esse product_id já se repetiu vezes suficientes seguidas.
+  function registerCandidate(productId: string): boolean {
+    if (candidateRef.current.productId === productId) {
+      candidateRef.current.streak += 1;
+    } else {
+      candidateRef.current = { productId, streak: 1 };
+    }
+    return candidateRef.current.streak >= CONFIRMATION_STREAK_REQUIRED;
+  }
+
+  function resetCandidate() {
+    candidateRef.current = { productId: "", streak: 0 };
+  }
+
   const runIdentification = useCallback(
     async (imageBase64: string, frame: HTMLCanvasElement) => {
       setScanState("identifying");
 
+      function confirmAndAdd(productId: string) {
+        resetCandidate();
+        addToCart(productId);
+        const now = Date.now();
+        lastPresenceAtRef.current = now;
+        awaitingRemovalSinceRef.current = now;
+        setScanState("awaiting_removal");
+      }
+
       if (visualModelReady && hasTrainedExamples()) {
         const localMatch = await predictProduct(frame);
         if (localMatch && localMatch.similarity >= LOCAL_MATCH_THRESHOLD) {
-          addToCart(localMatch.productId);
-          setScanState("locked");
-          setTimeout(() => setScanState("scanning"), LOCK_AFTER_ADD_MS);
+          if (registerCandidate(localMatch.productId)) {
+            confirmAndAdd(localMatch.productId);
+          } else {
+            setScanState("scanning");
+          }
           return;
         }
       }
@@ -248,6 +300,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       // intervalo mínimo entre chamadas reais (cota diária é bem curta).
       const now = Date.now();
       if (now - lastGeminiCallRef.current < GEMINI_COOLDOWN_MS) {
+        resetCandidate();
         setScanState("scanning");
         return;
       }
@@ -256,11 +309,14 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       const result = await identifyProduct(imageBase64, products);
 
       if ((result.confidence === "alta" || result.confidence === "media") && result.product_id) {
-        addToCart(result.product_id);
-        setScanState("locked");
-        setTimeout(() => setScanState("scanning"), LOCK_AFTER_ADD_MS);
+        if (registerCandidate(result.product_id)) {
+          confirmAndAdd(result.product_id);
+        } else {
+          setScanState("scanning");
+        }
       } else {
         // confidence "baixa" (ou sem match): não adiciona nada, sem feedback — silencioso.
+        resetCandidate();
         setScanState("scanning");
       }
     },
@@ -342,6 +398,22 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     };
   }, []);
 
+  const checkPresence = useCallback(async (): Promise<boolean | null> => {
+    const video = videoRef.current;
+    const model = modelRef.current;
+    if (!video || !model || video.readyState < 2) return null;
+
+    const frameArea = video.videoWidth * video.videoHeight;
+    if (frameArea === 0) return null;
+
+    const predictions = await model.detect(video);
+    return predictions.some((prediction) => {
+      const [, , boxWidth, boxHeight] = prediction.bbox;
+      const areaFraction = (boxWidth * boxHeight) / frameArea;
+      return prediction.score >= PRESENCE_SCORE_THRESHOLD && areaFraction >= PRESENCE_AREA_FRACTION;
+    });
+  }, []);
+
   useEffect(() => {
     if (cameraStatus !== "ready" || presenceModelStatus === "loading") return;
 
@@ -349,25 +421,30 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     const intervalMs = usingLocalGate ? DETECTION_INTERVAL_MS : FALLBACK_INTERVAL_MS;
 
     const interval = setInterval(async () => {
-      if (scanStateRef.current !== "scanning") return;
+      if (scanStateRef.current === "identifying") return;
 
+      if (scanStateRef.current === "awaiting_removal") {
+        // Sem detector local disponível: não dá pra saber se foi retirado de
+        // verdade, então cai num tempo fixo degradado como último recurso.
+        if (!usingLocalGate) {
+          if (Date.now() - awaitingRemovalSinceRef.current >= REMOVAL_GRACE_MS) {
+            setScanState("scanning");
+          }
+          return;
+        }
+
+        const hasPresence = await checkPresence();
+        if (hasPresence) {
+          lastPresenceAtRef.current = Date.now();
+        } else if (Date.now() - lastPresenceAtRef.current >= REMOVAL_GRACE_MS) {
+          setScanState("scanning");
+        }
+        return;
+      }
+
+      // scanState === "scanning"
       if (usingLocalGate) {
-        const video = videoRef.current;
-        const model = modelRef.current;
-        if (!video || !model || video.readyState < 2) return;
-
-        const frameArea = video.videoWidth * video.videoHeight;
-        if (frameArea === 0) return;
-
-        const predictions = await model.detect(video);
-        const hasPresence = predictions.some((prediction) => {
-          const [, , boxWidth, boxHeight] = prediction.bbox;
-          const areaFraction = (boxWidth * boxHeight) / frameArea;
-          return (
-            prediction.score >= PRESENCE_SCORE_THRESHOLD && areaFraction >= PRESENCE_AREA_FRACTION
-          );
-        });
-
+        const hasPresence = await checkPresence();
         if (!hasPresence) return;
       }
 
@@ -377,7 +454,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     }, intervalMs);
 
     return () => clearInterval(interval);
-  }, [cameraStatus, presenceModelStatus, captureFrame, runIdentification]);
+  }, [cameraStatus, presenceModelStatus, captureFrame, runIdentification, checkPresence]);
 
   // Zera o carrinho sozinho se ficar muito tempo parado — evita que a próxima
   // pessoa a usar o kiosk herde sem querer itens de quem esqueceu de concluir.
@@ -488,7 +565,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             {cameraStatus === "unavailable" && (
               <FallbackCapture onFile={handleFallbackPhoto} message={fallbackMessage} />
             )}
-            {cameraStatus === "ready" && presenceModelStatus !== "loading" && scanState !== "identifying" && (
+            {cameraStatus === "ready" && presenceModelStatus !== "loading" && scanState === "scanning" && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div className="relative h-[58%] w-[58%] max-w-sm">
                   <span
@@ -508,7 +585,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
                     style={{ filter: "drop-shadow(0 0 6px var(--color-success))" }}
                   />
                 </div>
-                {scanState === "scanning" && !toast && (
+                {!toast && (
                   <p className="absolute bottom-5 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-black/70 px-4 py-2 text-[12px] font-medium text-fg-muted backdrop-blur-sm">
                     <ScanSearch size={14} strokeWidth={1.5} className="text-success" />
                     Posicione o produto no centro da área e segure por 1 segundo
@@ -521,9 +598,9 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
                 Identificando
               </StatusBadge>
             )}
-            {cameraStatus === "ready" && scanState === "locked" && (
+            {cameraStatus === "ready" && scanState === "awaiting_removal" && (
               <StatusBadge tone="success" icon={<Check size={13} strokeWidth={1.5} />}>
-                Produto adicionado ao carrinho
+                Produto adicionado. Retire-o da câmera para continuar.
               </StatusBadge>
             )}
             {cameraStatus === "ready" && presenceModelStatus === "loading" && (
@@ -563,7 +640,14 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
         </div>
 
         <div className="lg:col-span-3">
-          <CartPanel cart={cart} total={total} onRemove={removeFromCart} onFinish={openFinishModal} />
+          <CartPanel
+            cart={cart}
+            total={total}
+            onIncrease={addToCart}
+            onDecrease={decreaseQuantity}
+            onRemoveProduct={removeProductGroup}
+            onFinish={openFinishModal}
+          />
         </div>
       </div>
 
@@ -644,7 +728,7 @@ function RecognitionStepper({ scanState }: { scanState: ScanState }) {
   const steps: { key: ScanState; label: string; icon: typeof ScanSearch }[] = [
     { key: "scanning", label: "Procurando produto", icon: ScanSearch },
     { key: "identifying", label: "Identificando...", icon: Sparkles },
-    { key: "locked", label: "Pronto!", icon: CheckCircle2 },
+    { key: "awaiting_removal", label: "Pronto!", icon: CheckCircle2 },
   ];
 
   return (
@@ -766,17 +850,48 @@ function FallbackCapture({
   );
 }
 
+type GroupedCartItem = {
+  productId: string;
+  productName: string;
+  price: number;
+  quantity: number;
+};
+
+function groupCart(cart: CartItem[]): GroupedCartItem[] {
+  const groups = new Map<string, GroupedCartItem>();
+  for (const item of cart) {
+    const existing = groups.get(item.product_id);
+    if (existing) {
+      existing.quantity += 1;
+    } else {
+      groups.set(item.product_id, {
+        productId: item.product_id,
+        productName: item.product_name,
+        price: item.price,
+        quantity: 1,
+      });
+    }
+  }
+  return Array.from(groups.values());
+}
+
 function CartPanel({
   cart,
   total,
-  onRemove,
+  onIncrease,
+  onDecrease,
+  onRemoveProduct,
   onFinish,
 }: {
   cart: CartItem[];
   total: number;
-  onRemove: (id: string) => void;
+  onIncrease: (productId: string) => void;
+  onDecrease: (productId: string) => void;
+  onRemoveProduct: (productId: string) => void;
   onFinish: () => void;
 }) {
+  const grouped = useMemo(() => groupCart(cart), [cart]);
+
   return (
     <div className="flex h-full flex-col rounded-2xl border border-border bg-surface">
       <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
@@ -789,27 +904,51 @@ function CartPanel({
       </div>
 
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
-        {cart.length === 0 && (
+        {grouped.length === 0 && (
           <p className="px-2 py-10 text-center text-[12px] text-fg-subtle">
             Nenhum item ainda. Mostre um produto para a câmera.
           </p>
         )}
-        {cart.map((item) => (
+        {grouped.map((group) => (
           <div
-            key={item.id}
+            key={group.productId}
             className="flex items-center gap-3 rounded-xl border border-border bg-surface-2 p-2.5"
           >
             <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border-strong bg-surface-3 text-[13px] font-semibold text-fg-muted">
-              {item.product_name.charAt(0).toUpperCase()}
+              {group.productName.charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-medium text-fg">{item.product_name}</p>
-              <p className="text-[12px] font-medium text-success">{formatBRL(item.price)}</p>
+              <p className="truncate text-[13px] font-medium text-fg">{group.productName}</p>
+              <p className="text-[12px] font-medium text-success">
+                {formatBRL(group.price * group.quantity)}
+                {group.quantity > 1 && (
+                  <span className="text-fg-subtle"> ({formatBRL(group.price)} cada)</span>
+                )}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-1 rounded-md border border-border bg-surface p-0.5">
+              <button
+                onClick={() => onDecrease(group.productId)}
+                className="flex h-6 w-6 items-center justify-center rounded text-fg-muted transition-colors duration-[120ms] hover:bg-surface-3 hover:text-fg"
+                aria-label={`Diminuir quantidade de ${group.productName}`}
+              >
+                <Minus size={12} strokeWidth={2} />
+              </button>
+              <span className="w-4 text-center text-[12px] font-medium text-fg">
+                {group.quantity}
+              </span>
+              <button
+                onClick={() => onIncrease(group.productId)}
+                className="flex h-6 w-6 items-center justify-center rounded text-fg-muted transition-colors duration-[120ms] hover:bg-surface-3 hover:text-fg"
+                aria-label={`Aumentar quantidade de ${group.productName}`}
+              >
+                <Plus size={12} strokeWidth={2} />
+              </button>
             </div>
             <button
-              onClick={() => onRemove(item.id)}
+              onClick={() => onRemoveProduct(group.productId)}
               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-fg-subtle transition-colors duration-[120ms] hover:bg-danger-dim hover:text-danger"
-              aria-label={`Remover ${item.product_name}`}
+              aria-label={`Remover ${group.productName}`}
             >
               <Trash2 size={14} strokeWidth={1.5} />
             </button>
