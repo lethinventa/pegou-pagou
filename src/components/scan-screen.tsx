@@ -418,7 +418,9 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       // intervalo mínimo entre chamadas reais (cota diária é bem curta).
       const now = Date.now();
       if (now - lastGeminiCallRef.current < GEMINI_COOLDOWN_MS) {
-        resetCandidate();
+        // Só pula essa rodada — não reseta o candidato. Como o intervalo de detecção
+        // (800ms) é bem menor que o cooldown (5s), o tick logo após uma chamada real
+        // sempre cairia aqui; resetar apagaria o streak que acabou de começar.
         setScanState("scanning");
         return;
       }
