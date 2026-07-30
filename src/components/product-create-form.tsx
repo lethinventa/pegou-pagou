@@ -24,6 +24,7 @@ export function ProductCreateForm() {
   const [category, setCategory] = useState("");
   const [mainImage, setMainImage] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (mode !== "search" || selected || !query.trim()) return;
@@ -54,22 +55,27 @@ export function ProductCreateForm() {
     if (!trimmedName || Number.isNaN(parsedPrice) || parsedPrice < 0) return;
 
     setSaving(true);
-    const formData = new FormData();
-    formData.set("name", trimmedName);
-    formData.set("price", String(parsedPrice));
-    if (category.trim()) formData.set("category", category.trim());
-    if (selected?.brand) formData.set("brand", selected.brand);
-    if (selected?.quantity) formData.set("quantity", selected.quantity);
-    if (selected?.imageUrl) formData.set("imageUrl", selected.imageUrl);
-    if (selected?.code) formData.set("externalId", selected.code);
-    if (mainImage) formData.set("mainImageFile", mainImage);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set("name", trimmedName);
+      formData.set("price", String(parsedPrice));
+      if (category.trim()) formData.set("category", category.trim());
+      if (selected?.brand) formData.set("brand", selected.brand);
+      if (selected?.quantity) formData.set("quantity", selected.quantity);
+      if (selected?.imageUrl) formData.set("imageUrl", selected.imageUrl);
+      if (selected?.code) formData.set("externalId", selected.code);
+      if (mainImage) formData.set("mainImageFile", mainImage);
 
-    const created = await createProduct(formData);
-    setSaving(false);
-    if (created?.id) {
-      router.push(`/produtos/${created.id}`);
-    } else {
-      router.push("/produtos");
+      const created = await createProduct(formData);
+      if (created?.id) {
+        router.push(`/produtos/${created.id}`);
+      } else {
+        router.push("/produtos");
+      }
+    } catch {
+      setError("Não foi possível salvar o produto. Verifique a conexão com o Supabase e tente de novo.");
+      setSaving(false);
     }
   }
 
@@ -241,6 +247,12 @@ export function ProductCreateForm() {
               </div>
             )}
           </div>
+
+          {error && (
+            <p className="mt-3 rounded-md border border-danger/30 bg-danger-dim px-3 py-2 text-[12px] text-danger">
+              {error}
+            </p>
+          )}
 
           <div className="mt-4 flex items-center gap-2">
             <button

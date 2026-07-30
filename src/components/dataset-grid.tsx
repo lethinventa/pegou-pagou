@@ -15,24 +15,37 @@ export function DatasetGrid({
 }) {
   const [pending, setPending] = useState<string | null>(null);
   const [linking, setLinking] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleLink(imageId: string, productId: string) {
     if (!productId) return;
     setPending(imageId);
-    const formData = new FormData();
-    formData.set("id", imageId);
-    formData.set("productId", productId);
-    await linkOrphanImage(formData);
-    setPending(null);
-    setLinking(null);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set("id", imageId);
+      formData.set("productId", productId);
+      await linkOrphanImage(formData);
+      setLinking(null);
+    } catch {
+      setError("Não foi possível vincular a imagem. Tente de novo.");
+    } finally {
+      setPending(null);
+    }
   }
 
   async function handleDelete(imageId: string) {
     setPending(imageId);
-    const formData = new FormData();
-    formData.set("id", imageId);
-    await deleteReferenceImage(formData);
-    setPending(null);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set("id", imageId);
+      await deleteReferenceImage(formData);
+    } catch {
+      setError("Não foi possível excluir a imagem. Tente de novo.");
+    } finally {
+      setPending(null);
+    }
   }
 
   if (images.length === 0) {
@@ -44,62 +57,69 @@ export function DatasetGrid({
   }
 
   return (
-    <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-      {images.map((image) => (
-        <div
-          key={image.id}
-          className="overflow-hidden rounded-lg border border-border bg-surface"
-        >
-          <div className="aspect-square bg-surface-2">
-            {/* eslint-disable-next-line @next/next/no-img-element -- imagem do Supabase Storage */}
-            <img src={image.image_path} alt="" className="h-full w-full object-cover" />
-          </div>
-          <div className="p-2">
-            <p className="text-[10px] text-fg-subtle">
-              {image.origem === "camera" ? "Câmera" : "Upload"} · {formatDate(image.created_at)}
-            </p>
-            {linking === image.id ? (
-              <div className="mt-1.5 flex items-center gap-1">
-                <select
-                  autoFocus
-                  onChange={(e) => handleLink(image.id, e.target.value)}
-                  disabled={pending === image.id}
-                  defaultValue=""
-                  className="h-7 w-full rounded border border-border bg-surface-2 px-1.5 text-[11px] text-fg outline-none focus:border-highlight"
-                >
-                  <option value="" disabled>
-                    Escolher produto...
-                  </option>
-                  {products.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.name}
+    <div className="mt-6">
+      {error && (
+        <p className="mb-3 rounded-md border border-danger/30 bg-danger-dim px-3 py-2 text-[12px] text-danger">
+          {error}
+        </p>
+      )}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+        {images.map((image) => (
+          <div
+            key={image.id}
+            className="overflow-hidden rounded-lg border border-border bg-surface"
+          >
+            <div className="aspect-square bg-surface-2">
+              {/* eslint-disable-next-line @next/next/no-img-element -- imagem do Supabase Storage */}
+              <img src={image.image_path} alt="" className="h-full w-full object-cover" />
+            </div>
+            <div className="p-2">
+              <p className="text-[10px] text-fg-subtle">
+                {image.origem === "camera" ? "Câmera" : "Upload"} · {formatDate(image.created_at)}
+              </p>
+              {linking === image.id ? (
+                <div className="mt-1.5 flex items-center gap-1">
+                  <select
+                    autoFocus
+                    onChange={(e) => handleLink(image.id, e.target.value)}
+                    disabled={pending === image.id}
+                    defaultValue=""
+                    className="h-7 w-full rounded border border-border bg-surface-2 px-1.5 text-[11px] text-fg outline-none focus:border-highlight"
+                  >
+                    <option value="" disabled>
+                      Escolher produto...
                     </option>
-                  ))}
-                </select>
-              </div>
-            ) : (
-              <div className="mt-1.5 flex items-center gap-1">
-                <button
-                  onClick={() => setLinking(image.id)}
-                  disabled={pending === image.id}
-                  className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-border text-[11px] font-medium text-fg-muted hover:text-fg disabled:opacity-50"
-                >
-                  <Link2 size={11} strokeWidth={1.5} />
-                  Vincular
-                </button>
-                <button
-                  onClick={() => handleDelete(image.id)}
-                  disabled={pending === image.id}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-subtle hover:bg-danger-dim hover:text-danger disabled:opacity-50"
-                  aria-label="Excluir imagem"
-                >
-                  <Trash2 size={12} strokeWidth={1.5} />
-                </button>
-              </div>
-            )}
+                    {products.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div className="mt-1.5 flex items-center gap-1">
+                  <button
+                    onClick={() => setLinking(image.id)}
+                    disabled={pending === image.id}
+                    className="flex h-7 flex-1 items-center justify-center gap-1 rounded border border-border text-[11px] font-medium text-fg-muted hover:text-fg disabled:opacity-50"
+                  >
+                    <Link2 size={11} strokeWidth={1.5} />
+                    Vincular
+                  </button>
+                  <button
+                    onClick={() => handleDelete(image.id)}
+                    disabled={pending === image.id}
+                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-fg-subtle hover:bg-danger-dim hover:text-danger disabled:opacity-50"
+                    aria-label="Excluir imagem"
+                  >
+                    <Trash2 size={12} strokeWidth={1.5} />
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }

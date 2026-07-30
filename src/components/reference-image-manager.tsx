@@ -21,45 +21,75 @@ export function ReferenceImageManager({
 }) {
   const [cameraOpen, setCameraOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Mensagem genérica: a causa mais comum é o bucket "product-references" (Supabase
+  // Storage) ou a migration 0003_products_module.sql ainda não terem sido aplicados.
+  const UPLOAD_ERROR_MESSAGE =
+    'Não foi possível salvar a imagem. Confira se o bucket "product-references" existe no Supabase Storage e se a migration do módulo Produtos foi aplicada.';
 
   async function handleUpload(file: File) {
     setPending("upload");
-    const formData = new FormData();
-    formData.set("productId", productId);
-    formData.set("origem", "upload");
-    formData.set("file", file);
-    await addReferenceImage(formData);
-    setPending(null);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set("productId", productId);
+      formData.set("origem", "upload");
+      formData.set("file", file);
+      await addReferenceImage(formData);
+    } catch {
+      setError(UPLOAD_ERROR_MESSAGE);
+    } finally {
+      setPending(null);
+    }
   }
 
   async function handleCameraCapture(file: File) {
     setPending("camera");
-    const formData = new FormData();
-    formData.set("productId", productId);
-    formData.set("origem", "camera");
-    formData.set("file", file);
-    await addReferenceImage(formData);
-    setPending(null);
-    setCameraOpen(false);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set("productId", productId);
+      formData.set("origem", "camera");
+      formData.set("file", file);
+      await addReferenceImage(formData);
+      setCameraOpen(false);
+    } catch {
+      setError(UPLOAD_ERROR_MESSAGE);
+    } finally {
+      setPending(null);
+    }
   }
 
   async function handleDelete(id: string) {
     setPending(id);
-    const formData = new FormData();
-    formData.set("id", id);
-    formData.set("productId", productId);
-    await deleteReferenceImage(formData);
-    setPending(null);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set("id", id);
+      formData.set("productId", productId);
+      await deleteReferenceImage(formData);
+    } catch {
+      setError("Não foi possível excluir a imagem. Tente de novo.");
+    } finally {
+      setPending(null);
+    }
   }
 
   async function handleSetMain(id: string) {
     setPending(id);
-    const formData = new FormData();
-    formData.set("id", id);
-    formData.set("productId", productId);
-    await setMainReferenceImage(formData);
-    setPending(null);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.set("id", id);
+      formData.set("productId", productId);
+      await setMainReferenceImage(formData);
+    } catch {
+      setError("Não foi possível definir a imagem como principal. Tente de novo.");
+    } finally {
+      setPending(null);
+    }
   }
 
   return (
@@ -92,6 +122,12 @@ export function ReferenceImageManager({
           }}
         />
       </div>
+
+      {error && !cameraOpen && (
+        <p className="mt-3 rounded-md border border-danger/30 bg-danger-dim px-3 py-2 text-[12px] text-danger">
+          {error}
+        </p>
+      )}
 
       {images.length === 0 ? (
         <p className="mt-4 text-[13px] text-fg-subtle">
@@ -150,6 +186,7 @@ export function ReferenceImageManager({
           onClose={() => setCameraOpen(false)}
           onCapture={handleCameraCapture}
           pending={pending === "camera"}
+          error={error}
         />
       )}
     </div>
@@ -160,10 +197,12 @@ function CameraCaptureModal({
   onClose,
   onCapture,
   pending,
+  error,
 }: {
   onClose: () => void;
   onCapture: (file: File) => void;
   pending: boolean;
+  error: string | null;
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -266,6 +305,12 @@ function CameraCaptureModal({
             />
           )}
         </div>
+
+        {error && (
+          <p className="mt-3 rounded-md border border-danger/30 bg-danger-dim px-3 py-2 text-[12px] text-danger">
+            {error}
+          </p>
+        )}
 
         <div className="mt-3 flex justify-end gap-2">
           {previewUrl ? (
