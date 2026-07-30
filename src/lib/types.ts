@@ -12,6 +12,24 @@ export type Product = {
   quantity: string | null;
   image_url: string | null;
   external_id: string | null;
+  category: string | null;
+  correct_recognitions: number;
+  incorrect_recognitions: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProductWithStats = Product & {
+  reference_count: number;
+};
+
+export type ReferenceImageOrigin = "camera" | "upload";
+
+export type ReferenceImage = {
+  id: string;
+  product_id: string | null;
+  image_path: string;
+  origem: ReferenceImageOrigin;
   created_at: string;
 };
 

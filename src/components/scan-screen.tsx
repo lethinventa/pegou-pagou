@@ -23,6 +23,7 @@ import {
 import { formatBRL } from "@/lib/format";
 import { identifyProduct } from "@/lib/identify-product";
 import { finalizeSession } from "@/lib/actions/sessions";
+import { addReferenceImage, recordRecognitionFeedback } from "@/lib/actions/products";
 import { isVoiceEnabled, setVoiceEnabled, speak } from "@/lib/speak";
 import {
   hasTrainedExamples,
@@ -65,6 +66,12 @@ const GEMINI_COOLDOWN_MS = 5000; // no máx. 1 chamada real à Gemini a cada 5s
 const CONFIRMATION_STREAK_REQUIRED = 2;
 const REMOVAL_GRACE_MS = 1000; // tempo sem detectar presença pra considerar "retirado"
 
+// Depois de uma adição confirmada, a captura vira automaticamente uma nova imagem de
+// referência do produto — sem pedir confirmação explícita (isso deixaria a compra
+// lenta). Em vez disso, oferece uma janela curta pra "corrigir" caso tenha reconhecido
+// errado; se ninguém mexer, assume que estava certo e salva a referência normalmente.
+const FEEDBACK_WINDOW_MS = 4000;
+
 // Carrinho sem dono até o "Finalizar compra": se ficar parado tempo demais, mais vale
 // limpar sozinho do que arriscar misturar o consumo de duas pessoas na mesma sessão.
 const INACTIVITY_WARNING_MS = 3 * 60 * 1000;
@@ -99,6 +106,14 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   // Fallback só usado se o detector local de presença não estiver disponível: sem ele
   // não dá pra saber se o produto foi retirado, então cai num tempo fixo degradado.
   const awaitingRemovalSinceRef = useRef(0);
+  // Reconhecimento aguardando virar referência de treino: guarda o frame já capturado
+  // (não dá pra reler o <canvas> depois, ele é reaproveitado a cada detecção) e o timer
+  // que confirma como "correto" automaticamente se ninguém corrigir a tempo.
+  const pendingFeedbackRef = useRef<{
+    productId: string;
+    frameBlob: Blob;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("starting");
   const [visualModelReady, setVisualModelReady] = useState(false);
@@ -106,6 +121,11 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   const [cart, setCart] = useState<CartItem[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [pendingCorrection, setPendingCorrection] = useState<{
+    productId: string;
+    productName: string;
+  } | null>(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
   const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
   // Mesmo motivo do sessionNumber: ler localStorage direto no useState quebraria a
@@ -190,6 +210,85 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   const removeProductGroup = useCallback((productId: string) => {
     lastActivityRef.current = Date.now();
     setCart((prev) => prev.filter((item) => item.product_id !== productId));
+  }, []);
+
+  // Salva a captura como referência do produto e conta como acerto — usado tanto
+  // quando a janela de correção expira sem ninguém mexer, quanto quando alguém usa
+  // "Corrigir" só pra confirmar que estava certo mesmo.
+  const confirmRecognitionAsCorrect = useCallback(async (productId: string, frameBlob: Blob) => {
+    try {
+      const formData = new FormData();
+      formData.set("productId", productId);
+      formData.set("origem", "camera");
+      formData.set("file", new File([frameBlob], `captura-${Date.now()}.jpg`, { type: "image/jpeg" }));
+      await addReferenceImage(formData);
+      await recordRecognitionFeedback(productId, true);
+    } catch {
+      // Feedback é só pra melhorar o catálogo de referências com o tempo — uma
+      // falha aqui não deve incomodar quem já concluiu a compra.
+    }
+  }, []);
+
+  const flushPendingFeedback = useCallback(() => {
+    const pending = pendingFeedbackRef.current;
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pendingFeedbackRef.current = null;
+    setPendingCorrection(null);
+    void confirmRecognitionAsCorrect(pending.productId, pending.frameBlob);
+  }, [confirmRecognitionAsCorrect]);
+
+  const schedulePendingFeedback = useCallback(
+    (productId: string, productName: string, frame: HTMLCanvasElement) => {
+      frame.toBlob(
+        (blob) => {
+          if (!blob) return;
+          const timer = setTimeout(() => flushPendingFeedback(), FEEDBACK_WINDOW_MS);
+          pendingFeedbackRef.current = { productId, frameBlob: blob, timer };
+          setPendingCorrection({ productId, productName });
+        },
+        "image/jpeg",
+        0.8
+      );
+    },
+    [flushPendingFeedback]
+  );
+
+  async function handleCorrection(correctProductId: string) {
+    const pending = pendingFeedbackRef.current;
+    setCorrectionOpen(false);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    pendingFeedbackRef.current = null;
+    setPendingCorrection(null);
+
+    if (correctProductId === pending.productId) {
+      void confirmRecognitionAsCorrect(pending.productId, pending.frameBlob);
+      return;
+    }
+
+    decreaseQuantity(pending.productId);
+    addToCart(correctProductId);
+
+    try {
+      const formData = new FormData();
+      formData.set("productId", correctProductId);
+      formData.set("origem", "camera");
+      formData.set(
+        "file",
+        new File([pending.frameBlob], `captura-${Date.now()}.jpg`, { type: "image/jpeg" })
+      );
+      await addReferenceImage(formData);
+      await recordRecognitionFeedback(pending.productId, false);
+    } catch {
+      // idem — não bloqueia o fluxo de compra, que já foi corrigido na tela.
+    }
+  }
+
+  useEffect(() => {
+    return () => {
+      if (pendingFeedbackRef.current) clearTimeout(pendingFeedbackRef.current.timer);
+    };
   }, []);
 
   function openFinishModal() {
@@ -282,12 +381,17 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       setScanState("identifying");
 
       function confirmAndAdd(productId: string) {
+        // Qualquer feedback anterior ainda pendente (janela de "corrigir" não expirou)
+        // vira acerto implícito agora — evita duas capturas em aberto ao mesmo tempo.
+        flushPendingFeedback();
         resetCandidate();
         addToCart(productId);
         const now = Date.now();
         lastPresenceAtRef.current = now;
         awaitingRemovalSinceRef.current = now;
         setScanState("awaiting_removal");
+        const product = products.find((p) => p.id === productId);
+        if (product) schedulePendingFeedback(productId, product.name, frame);
       }
 
       if (visualModelReady && hasTrainedExamples()) {
@@ -327,7 +431,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
         setScanState("scanning");
       }
     },
-    [addToCart, products, visualModelReady]
+    [addToCart, products, visualModelReady, flushPendingFeedback, schedulePendingFeedback]
   );
 
   useEffect(() => {
@@ -614,6 +718,14 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
                 Produto adicionado. Retire-o da câmera para continuar.
               </StatusBadge>
             )}
+            {cameraStatus === "ready" && pendingCorrection && (
+              <button
+                onClick={() => setCorrectionOpen(true)}
+                className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full border border-border bg-black/70 px-4 py-2 text-[12px] font-medium text-fg-muted backdrop-blur-sm transition-colors duration-[120ms] hover:text-fg"
+              >
+                Não era {pendingCorrection.productName}? <span className="text-highlight">Corrigir</span>
+              </button>
+            )}
             {secondsUntilClear !== null && cart.length > 0 && !finishOpen && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 text-center">
                 <p className="text-[14px] font-medium text-fg">Ainda está aí?</p>
@@ -681,6 +793,14 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             addToCart(productId);
             setPickerOpen(false);
           }}
+        />
+      )}
+
+      {correctionOpen && (
+        <ProductPicker
+          products={products}
+          onClose={() => setCorrectionOpen(false)}
+          onPick={handleCorrection}
         />
       )}
 

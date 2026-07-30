@@ -48,6 +48,12 @@ export default function RootLayout({
                 Resumo
               </Link>
               <Link
+                href="/produtos"
+                className="rounded-md px-3 py-1.5 text-[13px] font-medium text-fg-muted transition-colors duration-[120ms] hover:bg-surface hover:text-fg"
+              >
+                Produtos
+              </Link>
+              <Link
                 href="/config"
                 className="rounded-md px-3 py-1.5 text-[13px] font-medium text-fg-muted transition-colors duration-[120ms] hover:bg-surface hover:text-fg"
               >
