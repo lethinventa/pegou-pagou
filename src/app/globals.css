@@ -1,6 +1,9 @@
 @import "tailwindcss";
 
 :root {
+  /* Site é dark-only de propósito — sem isso o Chrome "corrige" sozinho
+     campos de formulário e outros controles nativos, estragando o tema. */
+  color-scheme: dark;
   --background: #000000;
   --foreground: #ededed;
 }

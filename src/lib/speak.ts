@@ -1,8 +1,9 @@
 const VOICE_PREF_KEY = "pegou-pagou:voice-enabled";
 
+// Opt-in: fica desligada até a pessoa ligar de propósito no botão de som.
 export function isVoiceEnabled(): boolean {
-  if (typeof window === "undefined") return true;
-  return window.localStorage.getItem(VOICE_PREF_KEY) !== "false";
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(VOICE_PREF_KEY) === "true";
 }
 
 export function setVoiceEnabled(enabled: boolean) {

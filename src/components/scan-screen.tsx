@@ -26,9 +26,13 @@ import type { CartItem, Person, Product } from "@/lib/types";
 // frente da câmera — só aí a gente gasta 1 chamada real pra saber QUAL produto é.
 const DETECTION_INTERVAL_MS = 800;
 const FALLBACK_INTERVAL_MS = 25000; // usado só se o detector local falhar ao carregar
-const PRESENCE_SCORE_THRESHOLD = 0.55;
-const PRESENCE_AREA_FRACTION = 0.12; // objeto precisa ocupar uma fração razoável do quadro
-const GEMINI_COOLDOWN_MS = 6000; // no máx. 1 chamada real à Gemini a cada 6s
+// O detector (COCO-SSD) só conhece 80 classes genéricas (garrafa, xícara, banana...) —
+// nenhuma é "pacote de salgadinho". Pra objetos fora desse vocabulário ele ainda desenha
+// uma caixa em volta, só que com confiança mais baixa — por isso o threshold é frouxo:
+// não importa qual classe ele "acha" que é, só que tem algo grande e sólido na frente.
+const PRESENCE_SCORE_THRESHOLD = 0.25;
+const PRESENCE_AREA_FRACTION = 0.06;
+const GEMINI_COOLDOWN_MS = 5000; // no máx. 1 chamada real à Gemini a cada 5s
 const LOCK_AFTER_ADD_MS = 4000;
 
 // Carrinho sem dono até o "Concluir": se ficar parado tempo demais, mais vale limpar
@@ -381,6 +385,19 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             )}
             {cameraStatus === "unavailable" && (
               <FallbackCapture onFile={handleFallbackPhoto} message={fallbackMessage} />
+            )}
+            {cameraStatus === "ready" && modelStatus !== "loading" && scanState === "scanning" && (
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                <div className="relative h-[55%] w-[55%] max-w-xs">
+                  <span className="absolute left-0 top-0 h-8 w-8 rounded-tl-md border-l-2 border-t-2 border-fg/40" />
+                  <span className="absolute right-0 top-0 h-8 w-8 rounded-tr-md border-r-2 border-t-2 border-fg/40" />
+                  <span className="absolute bottom-0 left-0 h-8 w-8 rounded-bl-md border-b-2 border-l-2 border-fg/40" />
+                  <span className="absolute bottom-0 right-0 h-8 w-8 rounded-br-md border-b-2 border-r-2 border-fg/40" />
+                </div>
+                <p className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-border bg-black/60 px-3.5 py-1.5 text-[12px] font-medium text-fg-muted backdrop-blur-sm">
+                  Mostre o produto aqui
+                </p>
+              </div>
             )}
             {cameraStatus === "ready" && scanState === "identifying" && (
               <StatusBadge tone="highlight" icon={<Sparkles size={13} strokeWidth={1.5} />}>
