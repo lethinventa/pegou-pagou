@@ -769,8 +769,8 @@ export function ScanScreen({
               </StatusBadge>
             )}
             {cameraStatus === "ready" && pendingCorrection && (
-              <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-success/40 bg-success-dim px-3.5 py-2 text-[12px] font-medium text-success shadow-lg">
-                <Check size={13} strokeWidth={1.5} className="shrink-0" />
+              <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-success/50 bg-black/80 px-3.5 py-2 text-[12px] font-medium text-fg shadow-lg">
+                <Check size={13} strokeWidth={1.5} className="shrink-0 text-success" />
                 <span className="truncate">Adicionado: {pendingCorrection.productName}</span>
                 <button
                   onClick={() => setCorrectionOpen(true)}
@@ -945,16 +945,14 @@ function StatusBadge({
   tone: "highlight" | "success";
   icon: React.ReactNode;
 }) {
-  const toneClass =
-    tone === "success"
-      ? "border-success/40 bg-success-dim text-success"
-      : "border-highlight/40 bg-highlight-dim text-highlight";
+  const borderClass = tone === "success" ? "border-success/50" : "border-highlight/50";
+  const iconClass = tone === "success" ? "text-success" : "text-highlight";
 
   return (
     <div
-      className={`absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium backdrop-blur-sm ${toneClass}`}
+      className={`absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-black/80 px-3 py-1.5 text-[12px] font-medium text-fg backdrop-blur-sm ${borderClass}`}
     >
-      {icon}
+      <span className={iconClass}>{icon}</span>
       {children}
     </div>
   );
@@ -962,8 +960,8 @@ function StatusBadge({
 
 function Toast({ children }: { children: React.ReactNode }) {
   return (
-    <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-success/40 bg-success-dim px-3.5 py-2 text-[12px] font-medium text-success shadow-lg">
-      <Check size={13} strokeWidth={1.5} />
+    <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-success/50 bg-black/80 px-3.5 py-2 text-[12px] font-medium text-fg shadow-lg">
+      <Check size={13} strokeWidth={1.5} className="text-success" />
       {children}
     </div>
   );
