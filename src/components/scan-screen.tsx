@@ -1,11 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Camera, Check, ListPlus, Search, Sparkles, Trash2, X } from "lucide-react";
+import {
+  Camera,
+  Check,
+  ListPlus,
+  Search,
+  Sparkles,
+  Trash2,
+  Volume2,
+  VolumeX,
+  X,
+} from "lucide-react";
 import type { ObjectDetection } from "@tensorflow-models/coco-ssd";
 import { formatBRL } from "@/lib/format";
 import { identifyProduct } from "@/lib/identify-product";
 import { finalizeSession } from "@/lib/actions/sessions";
+import { isVoiceEnabled, setVoiceEnabled, speak } from "@/lib/speak";
 import { PersonPickerModal } from "@/components/person-picker-modal";
 import type { CartItem, Person, Product } from "@/lib/types";
 
@@ -20,6 +31,11 @@ const PRESENCE_AREA_FRACTION = 0.12; // objeto precisa ocupar uma fração razo�
 const GEMINI_COOLDOWN_MS = 6000; // no máx. 1 chamada real à Gemini a cada 6s
 const LOCK_AFTER_ADD_MS = 4000;
 
+// Carrinho sem dono até o "Concluir": se ficar parado tempo demais, mais vale limpar
+// sozinho do que arriscar misturar o consumo de duas pessoas diferentes na mesma sessão.
+const INACTIVITY_WARNING_MS = 3 * 60 * 1000;
+const INACTIVITY_CLEAR_COUNTDOWN_S = 30;
+
 type CameraStatus = "starting" | "ready" | "unavailable";
 type ScanState = "scanning" | "identifying" | "locked";
 type ModelStatus = "loading" | "ready" | "error";
@@ -31,6 +47,10 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   const scanStateRef = useRef<ScanState>("scanning");
   const modelRef = useRef<ObjectDetection | null>(null);
   const lastGeminiCallRef = useRef(0);
+  // 0 até a primeira atividade real (addToCart sempre grava o valor antes do
+  // carrinho deixar de estar vazio, então o efeito de inatividade nunca lê esse 0).
+  const lastActivityRef = useRef(0);
+  const hasGreetedRef = useRef(false);
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("starting");
   const [modelStatus, setModelStatus] = useState<ModelStatus>("loading");
@@ -40,6 +60,9 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   const [pickerOpen, setPickerOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
   const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
+  const [voiceEnabled, setVoiceEnabledState] = useState(() => isVoiceEnabled());
+  const [secondsUntilClear, setSecondsUntilClear] = useState<number | null>(null);
+  const [confirmation, setConfirmation] = useState<{ name: string; total: number } | null>(null);
 
   useEffect(() => {
     scanStateRef.current = scanState;
@@ -51,27 +74,64 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     return () => clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    if (!confirmation) return;
+    const timer = setTimeout(() => setConfirmation(null), 4500);
+    return () => clearTimeout(timer);
+  }, [confirmation]);
+
+  useEffect(() => {
+    if (cameraStatus === "ready" && !hasGreetedRef.current) {
+      hasGreetedRef.current = true;
+      speak("Mostre o produto para a câmera.");
+    }
+  }, [cameraStatus]);
+
   const total = useMemo(() => cart.reduce((sum, item) => sum + item.price, 0), [cart]);
 
-  const addToCart = useCallback((productId: string) => {
-    const product = products.find((p) => p.id === productId);
-    if (!product) return;
-    setCart((prev) => [
-      ...prev,
-      {
-        id: crypto.randomUUID(),
-        product_id: product.id,
-        product_name: product.name,
-        price: product.price,
-        added_at: new Date().toISOString(),
-      },
-    ]);
-    setToast(`Adicionado: ${product.name}`);
-  }, [products]);
+  const addToCart = useCallback(
+    (productId: string) => {
+      const product = products.find((p) => p.id === productId);
+      if (!product) return;
+      lastActivityRef.current = Date.now();
+      setCart((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          product_id: product.id,
+          product_name: product.name,
+          price: product.price,
+          added_at: new Date().toISOString(),
+        },
+      ]);
+      setToast(`Adicionado: ${product.name}`);
+      speak(`${product.name} adicionado.`);
+    },
+    [products]
+  );
 
   const removeFromCart = useCallback((cartItemId: string) => {
+    lastActivityRef.current = Date.now();
     setCart((prev) => prev.filter((item) => item.id !== cartItemId));
   }, []);
+
+  function openFinishModal() {
+    lastActivityRef.current = Date.now();
+    speak("Diga seu nome, ou toque na lista, para concluir.");
+    setFinishOpen(true);
+  }
+
+  function toggleVoice() {
+    const next = !voiceEnabled;
+    setVoiceEnabledState(next);
+    setVoiceEnabled(next);
+    if (!next) window.speechSynthesis?.cancel();
+  }
+
+  function dismissInactivityWarning() {
+    lastActivityRef.current = Date.now();
+    setSecondsUntilClear(null);
+  }
 
   async function handleConfirmPerson(person: Person) {
     try {
@@ -83,9 +143,11 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
           price: item.price,
         }))
       );
-      setToast(`Registrado para ${person.name} — ${formatBRL(total)}`);
+      setConfirmation({ name: person.name, total });
+      speak(`Registrado para ${person.name}, ${formatBRL(total)}.`);
       setCart([]);
       setFinishOpen(false);
+      lastActivityRef.current = Date.now();
     } catch {
       setToast("Erro ao registrar a sessão. Tente de novo.");
     }
@@ -216,6 +278,35 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     return () => clearInterval(interval);
   }, [cameraStatus, modelStatus, captureFrame, runIdentification]);
 
+  // Zera o carrinho sozinho se ficar muito tempo parado — evita que a próxima
+  // pessoa a usar o kiosk herde sem querer itens de quem esqueceu de concluir.
+  useEffect(() => {
+    if (cart.length === 0 || finishOpen) return;
+
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - lastActivityRef.current;
+      if (elapsed < INACTIVITY_WARNING_MS) {
+        setSecondsUntilClear(null);
+        return;
+      }
+
+      const remaining = Math.max(
+        0,
+        INACTIVITY_CLEAR_COUNTDOWN_S - Math.floor((elapsed - INACTIVITY_WARNING_MS) / 1000)
+      );
+      setSecondsUntilClear(remaining);
+
+      if (remaining === 0) {
+        setCart([]);
+        setToast("Carrinho esvaziado por inatividade");
+        speak("Carrinho esvaziado por inatividade.");
+        lastActivityRef.current = Date.now();
+      }
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [cart.length, finishOpen]);
+
   async function handleFallbackPhoto(file: File) {
     setFallbackMessage(null);
     const base64 = await fileToBase64(file);
@@ -241,13 +332,31 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             Aponte o produto pra câmera
           </h1>
         </div>
-        <button
-          onClick={() => setFinishOpen(true)}
-          disabled={cart.length === 0}
-          className="rounded-md bg-fg px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-fg-subtle"
-        >
-          Concluir
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={toggleVoice}
+            className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
+            aria-label={voiceEnabled ? "Desligar voz" : "Ligar voz"}
+          >
+            {voiceEnabled ? (
+              <Volume2 size={15} strokeWidth={1.5} />
+            ) : (
+              <VolumeX size={15} strokeWidth={1.5} />
+            )}
+          </button>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              onClick={openFinishModal}
+              disabled={cart.length === 0}
+              className="rounded-md bg-fg px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-fg-subtle"
+            >
+              Concluir
+            </button>
+            {cart.length === 0 && (
+              <span className="text-[11px] text-fg-subtle">Adicione ao menos 1 item</span>
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-3">
@@ -288,6 +397,20 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
                 Carregando detector...
               </StatusBadge>
             )}
+            {secondsUntilClear !== null && cart.length > 0 && !finishOpen && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 text-center">
+                <p className="text-[14px] font-medium text-fg">Ainda está aí?</p>
+                <p className="max-w-xs text-[13px] text-fg-muted">
+                  O carrinho vai ser esvaziado por inatividade em {secondsUntilClear}s.
+                </p>
+                <button
+                  onClick={dismissInactivityWarning}
+                  className="rounded-md bg-fg px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white"
+                >
+                  Ainda estou aqui
+                </button>
+              </div>
+            )}
             {toast && <Toast>{toast}</Toast>}
           </div>
 
@@ -320,6 +443,14 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
           total={total}
           onClose={() => setFinishOpen(false)}
           onConfirm={handleConfirmPerson}
+        />
+      )}
+
+      {confirmation && (
+        <FinalizeConfirmation
+          name={confirmation.name}
+          total={confirmation.total}
+          onDismiss={() => setConfirmation(null)}
         />
       )}
     </div>
@@ -375,6 +506,36 @@ function Toast({ children }: { children: React.ReactNode }) {
     <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-success/40 bg-success-dim px-3.5 py-2 text-[12px] font-medium text-success shadow-lg">
       <Check size={13} strokeWidth={1.5} />
       {children}
+    </div>
+  );
+}
+
+function FinalizeConfirmation({
+  name,
+  total,
+  onDismiss,
+}: {
+  name: string;
+  total: number;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+      <div className="flex flex-col items-center gap-4 rounded-lg border border-success/40 bg-surface-2 px-10 py-8 text-center shadow-2xl">
+        <span className="flex h-14 w-14 items-center justify-center rounded-full border border-success/40 bg-success-dim text-success">
+          <Check size={28} strokeWidth={1.5} />
+        </span>
+        <div>
+          <p className="text-lg font-semibold text-fg">Registrado para {name}</p>
+          <p className="mt-1 text-2xl font-semibold text-success">{formatBRL(total)}</p>
+        </div>
+        <button
+          onClick={onDismiss}
+          className="mt-2 rounded-md border border-border bg-surface px-4 py-2 text-[13px] font-medium text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
+        >
+          OK
+        </button>
+      </div>
     </div>
   );
 }
