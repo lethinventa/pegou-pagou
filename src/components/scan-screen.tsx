@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Check, ListPlus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { formatBRL } from "@/lib/format";
-import { mockIdentifyProduct } from "@/lib/mock-identify";
-import { MOCK_PRODUCTS } from "@/lib/mock-data";
+import { identifyProduct } from "@/lib/identify-product";
+import { finalizeSession } from "@/lib/actions/sessions";
 import { PersonPickerModal } from "@/components/person-picker-modal";
-import type { CartItem, Person } from "@/lib/types";
+import type { CartItem, Person, Product } from "@/lib/types";
 
 const SCAN_INTERVAL_MS = 3000;
 const LOCK_AFTER_ADD_MS = 4000;
@@ -14,7 +14,7 @@ const LOCK_AFTER_ADD_MS = 4000;
 type CameraStatus = "starting" | "ready" | "unavailable";
 type ScanState = "scanning" | "identifying" | "locked";
 
-export function ScanScreen() {
+export function ScanScreen({ people, products }: { people: Person[]; products: Product[] }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -41,7 +41,7 @@ export function ScanScreen() {
   const total = useMemo(() => cart.reduce((sum, item) => sum + item.price, 0), [cart]);
 
   const addToCart = useCallback((productId: string) => {
-    const product = MOCK_PRODUCTS.find((p) => p.id === productId);
+    const product = products.find((p) => p.id === productId);
     if (!product) return;
     setCart((prev) => [
       ...prev,
@@ -54,16 +54,28 @@ export function ScanScreen() {
       },
     ]);
     setToast(`Adicionado: ${product.name}`);
-  }, []);
+  }, [products]);
 
   const removeFromCart = useCallback((cartItemId: string) => {
     setCart((prev) => prev.filter((item) => item.id !== cartItemId));
   }, []);
 
-  function handleConfirmPerson(person: Person) {
-    setToast(`Registrado para ${person.name} — ${formatBRL(total)}`);
-    setCart([]);
-    setFinishOpen(false);
+  async function handleConfirmPerson(person: Person) {
+    try {
+      await finalizeSession(
+        person.id,
+        cart.map((item) => ({
+          productId: item.product_id,
+          productName: item.product_name,
+          price: item.price,
+        }))
+      );
+      setToast(`Registrado para ${person.name} — ${formatBRL(total)}`);
+      setCart([]);
+      setFinishOpen(false);
+    } catch {
+      setToast("Erro ao registrar a sessão. Tente de novo.");
+    }
   }
 
   const captureFrame = useCallback((): string | null => {
@@ -82,7 +94,7 @@ export function ScanScreen() {
   const runIdentification = useCallback(
     async (imageBase64: string) => {
       setScanState("identifying");
-      const result = await mockIdentifyProduct(imageBase64);
+      const result = await identifyProduct(imageBase64, products);
 
       if ((result.confidence === "alta" || result.confidence === "media") && result.product_id) {
         addToCart(result.product_id);
@@ -93,7 +105,7 @@ export function ScanScreen() {
         setScanState("scanning");
       }
     },
-    [addToCart]
+    [addToCart, products]
   );
 
   useEffect(() => {
@@ -142,7 +154,7 @@ export function ScanScreen() {
   async function handleFallbackPhoto(file: File) {
     setFallbackMessage(null);
     const base64 = await fileToBase64(file);
-    const result = await mockIdentifyProduct(base64);
+    const result = await identifyProduct(base64, products);
 
     if ((result.confidence === "alta" || result.confidence === "media") && result.product_id) {
       addToCart(result.product_id);
@@ -223,6 +235,7 @@ export function ScanScreen() {
 
       {pickerOpen && (
         <ProductPicker
+          products={products}
           onClose={() => setPickerOpen(false)}
           onPick={(productId) => {
             addToCart(productId);
@@ -233,6 +246,7 @@ export function ScanScreen() {
 
       {finishOpen && (
         <PersonPickerModal
+          people={people}
           total={total}
           onClose={() => setFinishOpen(false)}
           onConfirm={handleConfirmPerson}
@@ -380,14 +394,16 @@ function CartPanel({
 }
 
 function ProductPicker({
+  products,
   onClose,
   onPick,
 }: {
+  products: Product[];
   onClose: () => void;
   onPick: (productId: string) => void;
 }) {
   const [query, setQuery] = useState("");
-  const filtered = MOCK_PRODUCTS.filter((p) =>
+  const filtered = products.filter((p) =>
     p.name.toLowerCase().includes(query.trim().toLowerCase())
   );
 

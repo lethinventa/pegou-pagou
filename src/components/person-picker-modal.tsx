@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { Mic, Search, X } from "lucide-react";
-import { MOCK_PEOPLE } from "@/lib/mock-data";
 import { findBestPersonMatch } from "@/lib/fuzzy-match";
 import { formatBRL } from "@/lib/format";
 import type { Person } from "@/lib/types";
@@ -10,10 +9,12 @@ import type { Person } from "@/lib/types";
 type VoiceStatus = "idle" | "listening" | "not-found" | "unsupported" | "error";
 
 export function PersonPickerModal({
+  people,
   total,
   onClose,
   onConfirm,
 }: {
+  people: Person[];
   total: number;
   onClose: () => void;
   onConfirm: (person: Person) => void;
@@ -22,7 +23,7 @@ export function PersonPickerModal({
   const [voiceStatus, setVoiceStatus] = useState<VoiceStatus>("idle");
   const [heard, setHeard] = useState<string | null>(null);
 
-  const filtered = MOCK_PEOPLE.filter((p) =>
+  const filtered = people.filter((p) =>
     p.name.toLowerCase().includes(query.trim().toLowerCase())
   );
 
@@ -45,7 +46,7 @@ export function PersonPickerModal({
     recognition.onresult = (event) => {
       const transcript = event.results[0]?.[0]?.transcript ?? "";
       setHeard(transcript);
-      const match = findBestPersonMatch(transcript, MOCK_PEOPLE);
+      const match = findBestPersonMatch(transcript, people);
       if (match) {
         onConfirm(match);
       } else {

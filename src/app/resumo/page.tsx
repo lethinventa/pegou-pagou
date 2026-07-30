@@ -1,34 +1,35 @@
-import { MOCK_LOGS, MOCK_PEOPLE } from "@/lib/mock-data";
+import { getCurrentMonthLogs } from "@/lib/actions/logs";
+import { getPeople } from "@/lib/actions/people";
 import { formatBRL } from "@/lib/format";
 
-function currentMonthKey(date = new Date()): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
+// Resumo do mês corrente — sempre calculado na hora, nunca cacheado.
+export const dynamic = "force-dynamic";
 
-export default function ResumoPage() {
-  const monthKey = currentMonthKey();
-  const logsThisMonth = MOCK_LOGS.filter((log) => log.created_at.startsWith(monthKey));
+export default async function ResumoPage() {
+  const [logs, people] = await Promise.all([getCurrentMonthLogs(), getPeople()]);
 
-  const byPerson = MOCK_PEOPLE.map((person) => {
-    const logs = logsThisMonth.filter((log) => log.person_id === person.id);
-    const total = logs.reduce((sum, log) => sum + log.price, 0);
+  const byPerson = people
+    .map((person) => {
+      const personLogs = logs.filter((log) => log.person_id === person.id);
+      const total = personLogs.reduce((sum, log) => sum + Number(log.price), 0);
 
-    const itemCounts = new Map<string, { name: string; price: number; qty: number }>();
-    for (const entry of logs) {
-      const existing = itemCounts.get(entry.product_name);
-      if (existing) {
-        existing.qty += 1;
-      } else {
-        itemCounts.set(entry.product_name, {
-          name: entry.product_name,
-          price: entry.price,
-          qty: 1,
-        });
+      const itemCounts = new Map<string, { name: string; price: number; qty: number }>();
+      for (const entry of personLogs) {
+        const existing = itemCounts.get(entry.product_name);
+        if (existing) {
+          existing.qty += 1;
+        } else {
+          itemCounts.set(entry.product_name, {
+            name: entry.product_name,
+            price: Number(entry.price),
+            qty: 1,
+          });
+        }
       }
-    }
 
-    return { person, total, items: Array.from(itemCounts.values()) };
-  }).filter((entry) => entry.items.length > 0);
+      return { person, total, items: Array.from(itemCounts.values()) };
+    })
+    .filter((entry) => entry.items.length > 0);
 
   const monthLabel = new Date().toLocaleDateString("pt-BR", {
     month: "long",
