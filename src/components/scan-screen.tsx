@@ -771,7 +771,7 @@ export function ScanScreen({
             {cameraStatus === "ready" && pendingCorrection && (
               <button
                 onClick={() => setCorrectionOpen(true)}
-                className="absolute bottom-5 left-1/2 -translate-x-1/2 rounded-full border border-border bg-black/70 px-4 py-2 text-[12px] font-medium text-fg-muted backdrop-blur-sm transition-colors duration-[120ms] hover:text-fg"
+                className="absolute bottom-16 left-1/2 -translate-x-1/2 rounded-full border border-border bg-black/70 px-4 py-2 text-[12px] font-medium text-fg-muted backdrop-blur-sm transition-colors duration-[120ms] hover:text-fg"
               >
                 Não era {pendingCorrection.productName}? <span className="text-highlight">Corrigir</span>
               </button>
