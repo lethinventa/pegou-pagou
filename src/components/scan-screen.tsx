@@ -49,7 +49,7 @@ const PROBE_WIDTH = 80;
 const PROBE_HEIGHT = 60;
 const MOTION_PIXEL_DIFF_THRESHOLD = 30; // diferença de cinza (0-255) pra contar como "mudou"
 const MOTION_AREA_FRACTION = 0.16; // fração da área central que precisa mudar pra contar como presença
-const CENTRAL_REGION_FRACTION = 0.58; // combina com o guia visual (h-[58%] w-[58%]) na tela
+const CENTRAL_REGION_FRACTION = 0.85; // combina com o guia visual (h-[85%] w-[85%]) na tela
 const BASELINE_ADAPT_RATE = 0.08; // o quão rápido o "fundo vazio" se ajusta quando não há presença
 // Primeiro tenta reconhecer comparando com as fotos de referência do catálogo
 // (MobileNet + similaridade de cosseno, local, de graça). Só chama a Gemini de
@@ -732,7 +732,7 @@ export function ScanScreen({
             )}
             {cameraStatus === "ready" && scanState === "scanning" && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="relative h-[58%] w-[58%] max-w-sm">
+                <div className="relative h-[85%] w-[85%] max-w-lg">
                   <span
                     className="absolute left-0 top-0 h-9 w-9 rounded-tl-lg border-l-2 border-t-2 border-success"
                     style={{ filter: "drop-shadow(0 0 6px var(--color-success))" }}
@@ -769,12 +769,16 @@ export function ScanScreen({
               </StatusBadge>
             )}
             {cameraStatus === "ready" && pendingCorrection && (
-              <button
-                onClick={() => setCorrectionOpen(true)}
-                className="absolute bottom-16 left-1/2 -translate-x-1/2 rounded-full border border-border bg-black/70 px-4 py-2 text-[12px] font-medium text-fg-muted backdrop-blur-sm transition-colors duration-[120ms] hover:text-fg"
-              >
-                Não era {pendingCorrection.productName}? <span className="text-highlight">Corrigir</span>
-              </button>
+              <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-success/40 bg-success-dim px-3.5 py-2 text-[12px] font-medium text-success shadow-lg">
+                <Check size={13} strokeWidth={1.5} className="shrink-0" />
+                <span className="truncate">Adicionado: {pendingCorrection.productName}</span>
+                <button
+                  onClick={() => setCorrectionOpen(true)}
+                  className="shrink-0 whitespace-nowrap font-semibold text-highlight underline-offset-2 hover:underline"
+                >
+                  Corrigir
+                </button>
+              </div>
             )}
             {secondsUntilClear !== null && cart.length > 0 && !finishOpen && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-black/85 p-6 text-center">
@@ -790,7 +794,7 @@ export function ScanScreen({
                 </button>
               </div>
             )}
-            {toast && <Toast>{toast}</Toast>}
+            {toast && !pendingCorrection && <Toast>{toast}</Toast>}
           </div>
 
           <RecognitionStepper scanState={scanState} />
