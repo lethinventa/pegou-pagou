@@ -115,6 +115,9 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     timer: ReturnType<typeof setTimeout>;
   } | null>(null);
 
+  // Câmera sempre ligada dá a sensação de que o kiosk nunca "termina". Fica numa tela
+  // de repouso até um toque acordar — só aí liga a câmera de verdade.
+  const [awake, setAwake] = useState(false);
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("starting");
   const [visualModelReady, setVisualModelReady] = useState(false);
   const [scanState, setScanState] = useState<ScanState>("scanning");
@@ -314,6 +317,8 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     setCart([]);
     setToast(null);
     resetSession();
+    setAwake(false);
+    setCameraStatus("starting");
   }
 
   function toggleVoice() {
@@ -344,6 +349,8 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       setFinishOpen(false);
       lastActivityRef.current = Date.now();
       resetSession();
+      setAwake(false);
+      setCameraStatus("starting");
     } catch {
       setToast("Erro ao registrar a sessão. Tente de novo.");
     }
@@ -455,6 +462,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   }, [products]);
 
   useEffect(() => {
+    if (!awake) return;
     let cancelled = false;
 
     async function startCamera() {
@@ -483,7 +491,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     };
-  }, []);
+  }, [awake]);
 
   // Subtração de fundo: compara o quadro atual (numa amostra pequena, em cinza) com um
   // "fundo vazio" que só se atualiza quando NÃO há presença — assim, quando um produto
@@ -653,7 +661,16 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-10">
         <div className="lg:col-span-7">
           <div className="relative aspect-video overflow-hidden rounded-2xl border border-border bg-black">
-            {cameraStatus !== "unavailable" && (
+            {!awake && (
+              <button
+                onClick={() => setAwake(true)}
+                className="absolute inset-0 flex w-full flex-col items-center justify-center gap-3 text-fg-subtle transition-colors duration-[120ms] hover:text-fg-muted"
+              >
+                <Camera size={28} strokeWidth={1.25} />
+                <span className="text-[14px] font-medium">Toque para começar</span>
+              </button>
+            )}
+            {awake && cameraStatus !== "unavailable" && (
               <video
                 ref={videoRef}
                 autoPlay
@@ -671,7 +688,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
               </div>
             )}
 
-            {cameraStatus === "starting" && (
+            {awake && cameraStatus === "starting" && (
               <Overlay>
                 <Camera size={18} strokeWidth={1.5} className="text-fg-muted" />
                 <span>Ligando a câmera...</span>
