@@ -1,7 +1,7 @@
 import { Plus, Trash2 } from "lucide-react";
 import { createPerson, deletePerson, getPeople } from "@/lib/actions/people";
-import { createProduct, deleteProduct, getProducts } from "@/lib/actions/products";
-import { formatBRL } from "@/lib/format";
+import { getProducts } from "@/lib/actions/products";
+import { ProductsSection } from "@/components/products-section";
 
 // Cadastro precisa refletir o Supabase em tempo real — sem cache estático.
 export const dynamic = "force-dynamic";
@@ -63,56 +63,7 @@ export default async function ConfigPage() {
           </ul>
         </section>
 
-        <section className="rounded-lg border border-border bg-surface p-4">
-          <h2 className="text-[13px] font-semibold text-fg">Produtos</h2>
-          <form action={createProduct} className="mt-3 flex gap-2">
-            <input
-              name="name"
-              placeholder="Nome"
-              required
-              className="h-9 flex-1 rounded-md border border-border bg-surface-2 px-3 text-[13px] text-fg placeholder:text-fg-subtle outline-none transition-colors duration-[120ms] focus:border-highlight"
-            />
-            <input
-              name="price"
-              placeholder="Preço"
-              inputMode="decimal"
-              required
-              className="h-9 w-20 rounded-md border border-border bg-surface-2 px-3 text-[13px] text-fg placeholder:text-fg-subtle outline-none transition-colors duration-[120ms] focus:border-highlight"
-            />
-            <button
-              type="submit"
-              className="flex h-9 items-center gap-1.5 rounded-md bg-fg px-3.5 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white"
-            >
-              <Plus size={14} strokeWidth={1.5} />
-              Adicionar
-            </button>
-          </form>
-          <ul className="mt-3 divide-y divide-border">
-            {products.map((product) => (
-              <li key={product.id} className="flex items-center justify-between py-2.5">
-                <span className="text-[13px] text-fg">{product.name}</span>
-                <div className="flex items-center gap-3">
-                  <span className="text-[12px] text-fg-muted">{formatBRL(product.price)}</span>
-                  <form action={deleteProduct}>
-                    <input type="hidden" name="id" value={product.id} />
-                    <button
-                      type="submit"
-                      className="flex h-7 w-7 items-center justify-center rounded-md text-fg-subtle transition-colors duration-[120ms] hover:bg-danger-dim hover:text-danger"
-                      aria-label={`Remover ${product.name}`}
-                    >
-                      <Trash2 size={14} strokeWidth={1.5} />
-                    </button>
-                  </form>
-                </div>
-              </li>
-            ))}
-            {products.length === 0 && (
-              <p className="py-6 text-center text-[12px] text-fg-subtle">
-                Nenhum produto cadastrado.
-              </p>
-            )}
-          </ul>
-        </section>
+        <ProductsSection products={products} />
       </div>
     </div>
   );

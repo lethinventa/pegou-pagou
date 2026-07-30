@@ -23,13 +23,19 @@ import { formatBRL } from "@/lib/format";
 import { identifyProduct } from "@/lib/identify-product";
 import { finalizeSession } from "@/lib/actions/sessions";
 import { isVoiceEnabled, setVoiceEnabled, speak } from "@/lib/speak";
+import {
+  hasTrainedExamples,
+  loadVisualModel,
+  predictProduct,
+  trainFromProducts,
+} from "@/lib/visual-recognition";
 import { PersonPickerModal } from "@/components/person-picker-modal";
 import type { CartItem, Person, Product } from "@/lib/types";
 
 // A cota gratuita da Gemini é bem curta (20 req/dia no gemini-3.5-flash). Em vez de
 // perguntar pra ela em loop o dia inteiro, um detector de objetos local (TensorFlow.js
 // + COCO-SSD, roda no navegador, de graça, sem cota) decide se tem algo prominente na
-// frente da câmera — só aí a gente gasta 1 chamada real pra saber QUAL produto é.
+// frente da câmera — só aí a gente considera identificar de verdade.
 const DETECTION_INTERVAL_MS = 800;
 const FALLBACK_INTERVAL_MS = 25000; // usado só se o detector local falhar ao carregar
 // O detector (COCO-SSD) só conhece 80 classes genéricas (garrafa, xícara, banana...) —
@@ -38,6 +44,11 @@ const FALLBACK_INTERVAL_MS = 25000; // usado só se o detector local falhar ao c
 // não importa qual classe ele "acha" que é, só que tem algo grande e sólido na frente.
 const PRESENCE_SCORE_THRESHOLD = 0.25;
 const PRESENCE_AREA_FRACTION = 0.06;
+// Primeiro tenta reconhecer comparando com as fotos de referência do catálogo
+// (MobileNet + similaridade de cosseno, local, de graça). Só chama a Gemini de
+// verdade se a comparação local não bater com confiança suficiente — o número
+// abaixo é um chute razoável, precisa validar com fotos reais dos produtos.
+const LOCAL_MATCH_THRESHOLD = 0.85;
 const GEMINI_COOLDOWN_MS = 5000; // no máx. 1 chamada real à Gemini a cada 5s
 const LOCK_AFTER_ADD_MS = 4000;
 
@@ -48,7 +59,7 @@ const INACTIVITY_CLEAR_COUNTDOWN_S = 30;
 
 type CameraStatus = "starting" | "ready" | "unavailable";
 type ScanState = "scanning" | "identifying" | "locked";
-type ModelStatus = "loading" | "ready" | "error";
+type PresenceModelStatus = "loading" | "ready" | "error";
 
 export function ScanScreen({ people, products }: { people: Person[]; products: Product[] }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -64,7 +75,8 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   const sessionStartRef = useRef(0);
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("starting");
-  const [modelStatus, setModelStatus] = useState<ModelStatus>("loading");
+  const [presenceModelStatus, setPresenceModelStatus] = useState<PresenceModelStatus>("loading");
+  const [visualModelReady, setVisualModelReady] = useState(false);
   const [scanState, setScanState] = useState<ScanState>("scanning");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [toast, setToast] = useState<string | null>(null);
@@ -218,8 +230,29 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   }, []);
 
   const runIdentification = useCallback(
-    async (imageBase64: string) => {
+    async (imageBase64: string, frame: HTMLCanvasElement) => {
       setScanState("identifying");
+
+      if (visualModelReady && hasTrainedExamples()) {
+        const localMatch = await predictProduct(frame);
+        if (localMatch && localMatch.similarity >= LOCAL_MATCH_THRESHOLD) {
+          addToCart(localMatch.productId);
+          setScanState("locked");
+          setTimeout(() => setScanState("scanning"), LOCK_AFTER_ADD_MS);
+          return;
+        }
+      }
+
+      // Fallback: comparação local não teve confiança suficiente (ou não tem
+      // modelo/exemplos treinados ainda) — pergunta pra Gemini, respeitando o
+      // intervalo mínimo entre chamadas reais (cota diária é bem curta).
+      const now = Date.now();
+      if (now - lastGeminiCallRef.current < GEMINI_COOLDOWN_MS) {
+        setScanState("scanning");
+        return;
+      }
+      lastGeminiCallRef.current = now;
+
       const result = await identifyProduct(imageBase64, products);
 
       if ((result.confidence === "alta" || result.confidence === "media") && result.product_id) {
@@ -231,7 +264,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
         setScanState("scanning");
       }
     },
-    [addToCart, products]
+    [addToCart, products, visualModelReady]
   );
 
   useEffect(() => {
@@ -245,9 +278,9 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
         const model = await cocoSsd.load({ base: "lite_mobilenet_v2" });
         if (cancelled) return;
         modelRef.current = model;
-        setModelStatus("ready");
+        setPresenceModelStatus("ready");
       } catch {
-        if (!cancelled) setModelStatus("error");
+        if (!cancelled) setPresenceModelStatus("error");
       }
     }
 
@@ -257,6 +290,26 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAndTrainVisualModel() {
+      try {
+        await loadVisualModel();
+        await trainFromProducts(products);
+        if (!cancelled) setVisualModelReady(true);
+      } catch {
+        // Sem modelo visual local, tudo cai direto no fallback da Gemini — sem problema.
+      }
+    }
+
+    loadAndTrainVisualModel();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [products]);
 
   useEffect(() => {
     let cancelled = false;
@@ -290,9 +343,9 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   }, []);
 
   useEffect(() => {
-    if (cameraStatus !== "ready" || modelStatus === "loading") return;
+    if (cameraStatus !== "ready" || presenceModelStatus === "loading") return;
 
-    const usingLocalGate = modelStatus === "ready";
+    const usingLocalGate = presenceModelStatus === "ready";
     const intervalMs = usingLocalGate ? DETECTION_INTERVAL_MS : FALLBACK_INTERVAL_MS;
 
     const interval = setInterval(async () => {
@@ -318,16 +371,13 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
         if (!hasPresence) return;
       }
 
-      const now = Date.now();
-      if (now - lastGeminiCallRef.current < GEMINI_COOLDOWN_MS) return;
-      lastGeminiCallRef.current = now;
-
-      const frame = captureFrame();
-      if (frame) runIdentification(frame);
+      const frameBase64 = captureFrame();
+      const canvas = canvasRef.current;
+      if (frameBase64 && canvas) runIdentification(frameBase64, canvas);
     }, intervalMs);
 
     return () => clearInterval(interval);
-  }, [cameraStatus, modelStatus, captureFrame, runIdentification]);
+  }, [cameraStatus, presenceModelStatus, captureFrame, runIdentification]);
 
   // Zera o carrinho sozinho se ficar muito tempo parado — evita que a próxima
   // pessoa a usar o kiosk herde sem querer itens de quem esqueceu de concluir.
@@ -438,7 +488,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             {cameraStatus === "unavailable" && (
               <FallbackCapture onFile={handleFallbackPhoto} message={fallbackMessage} />
             )}
-            {cameraStatus === "ready" && modelStatus !== "loading" && scanState !== "identifying" && (
+            {cameraStatus === "ready" && presenceModelStatus !== "loading" && scanState !== "identifying" && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div className="relative h-[58%] w-[58%] max-w-sm">
                   <span
@@ -476,7 +526,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
                 Produto adicionado ao carrinho
               </StatusBadge>
             )}
-            {cameraStatus === "ready" && modelStatus === "loading" && (
+            {cameraStatus === "ready" && presenceModelStatus === "loading" && (
               <StatusBadge tone="highlight" icon={<Sparkles size={13} strokeWidth={1.5} />}>
                 Carregando detector...
               </StatusBadge>

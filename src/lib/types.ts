@@ -8,7 +8,20 @@ export type Product = {
   id: string;
   name: string;
   price: number;
+  brand: string | null;
+  quantity: string | null;
+  image_url: string | null;
+  external_id: string | null;
   created_at: string;
+};
+
+export type OpenFoodFactsResult = {
+  code: string;
+  name: string;
+  brand: string | null;
+  quantity: string | null;
+  imageUrl: string | null;
+  thumbnailUrl: string | null;
 };
 
 export type ConsumptionLog = {

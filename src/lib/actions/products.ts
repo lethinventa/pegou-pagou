@@ -16,8 +16,22 @@ export async function createProduct(formData: FormData) {
   const price = Number(String(formData.get("price") ?? "").replace(",", "."));
   if (!name || Number.isNaN(price) || price < 0) return;
 
+  // Vêm preenchidos quando o produto foi escolhido via busca no Open Food Facts;
+  // ficam null no cadastro manual simples.
+  const brand = String(formData.get("brand") ?? "").trim() || null;
+  const quantity = String(formData.get("quantity") ?? "").trim() || null;
+  const imageUrl = String(formData.get("imageUrl") ?? "").trim() || null;
+  const externalId = String(formData.get("externalId") ?? "").trim() || null;
+
   const supabase = getSupabaseServerClient();
-  const { error } = await supabase.from("products").insert({ name, price });
+  const { error } = await supabase.from("products").insert({
+    name,
+    price,
+    brand,
+    quantity,
+    image_url: imageUrl,
+    external_id: externalId,
+  });
   if (error) throw new Error(error.message);
 
   revalidatePath("/config");
