@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
 import { Camera, Check, ListPlus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { formatBRL } from "@/lib/format";
 import { mockIdentifyProduct } from "@/lib/mock-identify";
 import { MOCK_PRODUCTS } from "@/lib/mock-data";
+import { PersonPickerModal } from "@/components/person-picker-modal";
 import type { CartItem, Person } from "@/lib/types";
 
 const SCAN_INTERVAL_MS = 3000;
@@ -14,8 +14,7 @@ const LOCK_AFTER_ADD_MS = 4000;
 type CameraStatus = "starting" | "ready" | "unavailable";
 type ScanState = "scanning" | "identifying" | "locked";
 
-export function ScanScreen({ person }: { person: Person }) {
-  const router = useRouter();
+export function ScanScreen() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -26,6 +25,7 @@ export function ScanScreen({ person }: { person: Person }) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [toast, setToast] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [finishOpen, setFinishOpen] = useState(false);
   const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -59,6 +59,12 @@ export function ScanScreen({ person }: { person: Person }) {
   const removeFromCart = useCallback((cartItemId: string) => {
     setCart((prev) => prev.filter((item) => item.id !== cartItemId));
   }, []);
+
+  function handleConfirmPerson(person: Person) {
+    setToast(`Registrado para ${person.name} — ${formatBRL(total)}`);
+    setCart([]);
+    setFinishOpen(false);
+  }
 
   const captureFrame = useCallback((): string | null => {
     const video = videoRef.current;
@@ -152,15 +158,18 @@ export function ScanScreen({ person }: { person: Person }) {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-fg-subtle">
-            Escaneando para
+            Sessão atual
           </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">{person.name}</h1>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">
+            Aponte o produto pra câmera
+          </h1>
         </div>
         <button
-          onClick={() => router.push("/")}
-          className="rounded-md border border-border bg-surface px-3.5 py-2 text-[13px] font-medium text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
+          onClick={() => setFinishOpen(true)}
+          disabled={cart.length === 0}
+          className="rounded-md bg-fg px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-fg-subtle"
         >
-          Concluir e trocar pessoa
+          Concluir
         </button>
       </div>
 
@@ -219,6 +228,14 @@ export function ScanScreen({ person }: { person: Person }) {
             addToCart(productId);
             setPickerOpen(false);
           }}
+        />
+      )}
+
+      {finishOpen && (
+        <PersonPickerModal
+          total={total}
+          onClose={() => setFinishOpen(false)}
+          onConfirm={handleConfirmPerson}
         />
       )}
     </div>
