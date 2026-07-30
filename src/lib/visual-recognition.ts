@@ -57,21 +57,24 @@ async function embedImage(
   return Array.from(data, (value) => value / norm);
 }
 
-/** Recalcula os exemplos de referência a partir dos produtos com image_url. */
+/**
+ * Recalcula os exemplos de referência — uma entrada por imagem, podendo haver
+ * várias por produto (imagem principal + galeria de referências em /produtos).
+ * Mais fotos = mais chance de bater com ângulos/iluminação diferentes na câmera.
+ */
 export async function trainFromProducts(
-  products: { id: string; image_url: string | null }[]
+  images: { productId: string; imageUrl: string }[]
 ): Promise<void> {
   if (!model) return;
 
   const examples: TrainedExample[] = [];
-  for (const product of products) {
-    if (!product.image_url) continue;
+  for (const image of images) {
     try {
-      const img = await loadImage(product.image_url);
+      const img = await loadImage(image.imageUrl);
       const embedding = await embedImage(img);
-      if (embedding) examples.push({ productId: product.id, embedding });
+      if (embedding) examples.push({ productId: image.productId, embedding });
     } catch {
-      // Imagem falhou (CORS, 404, etc.) — esse produto fica só no fallback da Gemini.
+      // Imagem falhou (CORS, 404, etc.) — essa referência fica de fora do treino.
     }
   }
 

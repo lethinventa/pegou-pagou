@@ -32,7 +32,7 @@ import {
   trainFromProducts,
 } from "@/lib/visual-recognition";
 import { PersonPickerModal } from "@/components/person-picker-modal";
-import type { CartItem, Person, Product } from "@/lib/types";
+import type { CartItem, Person, Product, ReferenceImage } from "@/lib/types";
 
 // A cota gratuita da Gemini é bem curta (20 req/dia no gemini-3.5-flash). Em vez de
 // perguntar pra ela em loop o dia inteiro, um detector de presença local decide se tem
@@ -80,7 +80,15 @@ const INACTIVITY_CLEAR_COUNTDOWN_S = 30;
 type CameraStatus = "starting" | "ready" | "unavailable";
 type ScanState = "scanning" | "identifying" | "awaiting_removal";
 
-export function ScanScreen({ people, products }: { people: Person[]; products: Product[] }) {
+export function ScanScreen({
+  people,
+  products,
+  referenceImages,
+}: {
+  people: Person[];
+  products: Product[];
+  referenceImages: ReferenceImage[];
+}) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -443,13 +451,26 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     [addToCart, products, visualModelReady, flushPendingFeedback, schedulePendingFeedback]
   );
 
+  // Uma entrada por imagem de referência (imagem principal + todas as da galeria em
+  // /produtos) — quanto mais fotos por produto, melhor o reconhecimento local.
+  const trainingImages = useMemo(() => {
+    const images: { productId: string; imageUrl: string }[] = [];
+    for (const product of products) {
+      if (product.image_url) images.push({ productId: product.id, imageUrl: product.image_url });
+    }
+    for (const ref of referenceImages) {
+      if (ref.product_id) images.push({ productId: ref.product_id, imageUrl: ref.image_path });
+    }
+    return images;
+  }, [products, referenceImages]);
+
   useEffect(() => {
     let cancelled = false;
 
     async function loadAndTrainVisualModel() {
       try {
         await loadVisualModel();
-        await trainFromProducts(products);
+        await trainFromProducts(trainingImages);
         if (!cancelled) setVisualModelReady(true);
       } catch {
         // Sem modelo visual local, tudo cai direto no fallback da Gemini — sem problema.
@@ -461,7 +482,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     return () => {
       cancelled = true;
     };
-  }, [products]);
+  }, [trainingImages]);
 
   useEffect(() => {
     if (!awake) return;

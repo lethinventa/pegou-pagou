@@ -141,6 +141,17 @@ export async function getReferenceImages(productId: string): Promise<ReferenceIm
   return data ?? [];
 }
 
+/** Todas as referências já vinculadas a um produto — usado pra treinar o reconhecimento local. */
+export async function getAllReferenceImages(): Promise<ReferenceImage[]> {
+  const supabase = getSupabaseServerClient();
+  const { data, error } = await supabase
+    .from("product_reference_images")
+    .select("*")
+    .not("product_id", "is", null);
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
 export async function getOrphanImages(): Promise<ReferenceImage[]> {
   const supabase = getSupabaseServerClient();
   const { data, error } = await supabase
