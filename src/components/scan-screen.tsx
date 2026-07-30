@@ -65,6 +65,10 @@ const GEMINI_COOLDOWN_MS = 5000; // no máx. 1 chamada real à Gemini a cada 5s
 // produto pode continuar na frente da câmera depois que um timer fixo acabaria.
 const CONFIRMATION_STREAK_REQUIRED = 2;
 const REMOVAL_GRACE_MS = 1000; // tempo sem detectar presença pra considerar "retirado"
+// Válvula de escape: se a câmera achar que ainda tem presença por tempo longo demais
+// (ex.: exposição/luz reajustou sozinha e o "fundo vazio" congelado nunca mais bate),
+// força um resync do fundo com o quadro atual em vez de travar pra sempre.
+const MAX_AWAITING_REMOVAL_MS = 8000;
 
 // Depois de uma adição confirmada, a captura vira automaticamente uma nova imagem de
 // referência do produto — sem pedir confirmação explícita (isso deixaria a compra
@@ -581,6 +585,12 @@ export function ScanScreen({
       if (scanStateRef.current === "identifying") return;
 
       if (scanStateRef.current === "awaiting_removal") {
+        if (Date.now() - awaitingRemovalSinceRef.current >= MAX_AWAITING_REMOVAL_MS) {
+          baselineRef.current = null;
+          setScanState("scanning");
+          return;
+        }
+
         const hasPresence = await checkPresence();
         if (hasPresence) {
           lastPresenceAtRef.current = Date.now();
