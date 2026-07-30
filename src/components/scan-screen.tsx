@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Camera, Check, ListPlus, Search, Sparkles, Trash2, X } from "lucide-react";
 import { formatBRL } from "@/lib/format";
 import { mockIdentifyProduct } from "@/lib/mock-identify";
 import { MOCK_PRODUCTS } from "@/lib/mock-data";
@@ -150,12 +151,14 @@ export function ScanScreen({ person }: { person: Person }) {
     <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-8">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-sm text-zinc-500">Escaneando para</p>
-          <h1 className="text-2xl font-semibold">{person.name}</h1>
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-fg-subtle">
+            Escaneando para
+          </p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">{person.name}</h1>
         </div>
         <button
           onClick={() => router.push("/")}
-          className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-600 hover:bg-zinc-100"
+          className="rounded-md border border-border bg-surface px-3.5 py-2 text-[13px] font-medium text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
         >
           Concluir e trocar pessoa
         </button>
@@ -163,7 +166,7 @@ export function ScanScreen({ person }: { person: Person }) {
 
       <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <div className="relative aspect-video overflow-hidden rounded-2xl bg-black">
+          <div className="relative aspect-video overflow-hidden rounded-lg border border-border bg-black">
             {cameraStatus !== "unavailable" && (
               <video
                 ref={videoRef}
@@ -175,23 +178,33 @@ export function ScanScreen({ person }: { person: Person }) {
             )}
             <canvas ref={canvasRef} className="hidden" />
 
-            {cameraStatus === "starting" && <Overlay>Ligando a câmera...</Overlay>}
+            {cameraStatus === "starting" && (
+              <Overlay>
+                <Camera size={18} strokeWidth={1.5} className="text-fg-muted" />
+                <span>Ligando a câmera...</span>
+              </Overlay>
+            )}
             {cameraStatus === "unavailable" && (
               <FallbackCapture onFile={handleFallbackPhoto} message={fallbackMessage} />
             )}
             {cameraStatus === "ready" && scanState === "identifying" && (
-              <StatusBadge>Identificando...</StatusBadge>
+              <StatusBadge tone="highlight" icon={<Sparkles size={13} strokeWidth={1.5} />}>
+                Identificando
+              </StatusBadge>
             )}
             {cameraStatus === "ready" && scanState === "locked" && (
-              <StatusBadge tone="success">Adicionado! Pode afastar o produto</StatusBadge>
+              <StatusBadge tone="success" icon={<Check size={13} strokeWidth={1.5} />}>
+                Adicionado! Pode afastar o produto
+              </StatusBadge>
             )}
             {toast && <Toast>{toast}</Toast>}
           </div>
 
           <button
             onClick={() => setPickerOpen(true)}
-            className="mt-4 w-full rounded-xl border border-zinc-300 bg-white py-3 text-base font-medium text-zinc-700 hover:bg-zinc-50"
+            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-surface py-3 text-[14px] font-medium text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
           >
+            <ListPlus size={16} strokeWidth={1.5} />
             Escolher da lista
           </button>
         </div>
@@ -226,7 +239,7 @@ function fileToBase64(file: File): Promise<string> {
 
 function Overlay({ children }: { children: React.ReactNode }) {
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-white">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 text-[13px] text-fg-muted">
       {children}
     </div>
   );
@@ -234,17 +247,23 @@ function Overlay({ children }: { children: React.ReactNode }) {
 
 function StatusBadge({
   children,
-  tone = "neutral",
+  tone,
+  icon,
 }: {
   children: React.ReactNode;
-  tone?: "neutral" | "success";
+  tone: "highlight" | "success";
+  icon: React.ReactNode;
 }) {
+  const toneClass =
+    tone === "success"
+      ? "border-success/40 bg-success-dim text-success"
+      : "border-highlight/40 bg-highlight-dim text-highlight";
+
   return (
     <div
-      className={`absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-4 py-1.5 text-sm font-medium text-white shadow ${
-        tone === "success" ? "bg-emerald-600" : "bg-black/70"
-      }`}
+      className={`absolute left-1/2 top-4 flex -translate-x-1/2 items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] font-medium backdrop-blur-sm ${toneClass}`}
     >
+      {icon}
       {children}
     </div>
   );
@@ -252,7 +271,8 @@ function StatusBadge({
 
 function Toast({ children }: { children: React.ReactNode }) {
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-lg">
+    <div className="absolute bottom-4 left-1/2 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-success/40 bg-success-dim px-3.5 py-2 text-[12px] font-medium text-success shadow-lg">
+      <Check size={13} strokeWidth={1.5} />
       {children}
     </div>
   );
@@ -266,9 +286,11 @@ function FallbackCapture({
   message: string | null;
 }) {
   return (
-    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-zinc-900 p-6 text-center text-white">
-      <p className="text-sm text-zinc-300">Câmera indisponível. Tire uma foto do produto.</p>
-      <label className="cursor-pointer rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-700">
+    <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
+      <Camera size={22} strokeWidth={1.5} className="text-fg-subtle" />
+      <p className="text-[13px] text-fg-muted">Câmera indisponível. Tire uma foto do produto.</p>
+      <label className="flex cursor-pointer items-center gap-2 rounded-md bg-fg px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white">
+        <Camera size={15} strokeWidth={1.5} />
         Tirar foto
         <input
           type="file"
@@ -282,7 +304,7 @@ function FallbackCapture({
           }}
         />
       </label>
-      {message && <p className="max-w-xs text-sm text-amber-400">{message}</p>}
+      {message && <p className="max-w-xs text-[12px] text-warning">{message}</p>}
     </div>
   );
 }
@@ -297,36 +319,44 @@ function CartPanel({
   onRemove: (id: string) => void;
 }) {
   return (
-    <div className="flex flex-col rounded-2xl border border-zinc-200 bg-white">
-      <div className="border-b border-zinc-200 px-5 py-4">
-        <h2 className="font-semibold">Carrinho da sessão</h2>
+    <div className="flex flex-col rounded-lg border border-border bg-surface">
+      <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
+        <h2 className="text-[13px] font-semibold text-fg">Carrinho da sessão</h2>
+        {cart.length > 0 && (
+          <span className="rounded-full border border-border-strong bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-fg-muted">
+            {cart.length}
+          </span>
+        )}
       </div>
 
-      <div className="flex-1 divide-y divide-zinc-100 overflow-y-auto">
+      <div className="flex-1 divide-y divide-border overflow-y-auto">
         {cart.length === 0 && (
-          <p className="px-5 py-8 text-center text-sm text-zinc-400">
+          <p className="px-4 py-10 text-center text-[12px] text-fg-subtle">
             Nenhum item ainda. Mostre um produto para a câmera.
           </p>
         )}
         {cart.map((item) => (
-          <div key={item.id} className="flex items-center justify-between px-5 py-3">
+          <div key={item.id} className="flex items-center justify-between px-4 py-3">
             <div>
-              <p className="text-sm font-medium">{item.product_name}</p>
-              <p className="text-sm text-zinc-500">{formatBRL(item.price)}</p>
+              <p className="text-[13px] font-medium text-fg">{item.product_name}</p>
+              <p className="text-[12px] text-fg-muted">{formatBRL(item.price)}</p>
             </div>
             <button
               onClick={() => onRemove(item.id)}
-              className="text-sm font-medium text-red-500 hover:text-red-600"
+              className="flex h-7 w-7 items-center justify-center rounded-md text-fg-subtle transition-colors duration-[120ms] hover:bg-danger-dim hover:text-danger"
+              aria-label={`Remover ${item.product_name}`}
             >
-              Remover
+              <Trash2 size={14} strokeWidth={1.5} />
             </button>
           </div>
         ))}
       </div>
 
-      <div className="flex items-center justify-between border-t border-zinc-200 px-5 py-4">
-        <span className="font-medium">Total</span>
-        <span className="text-lg font-semibold">{formatBRL(total)}</span>
+      <div className="flex items-center justify-between border-t border-border px-4 py-4">
+        <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-fg-subtle">
+          Total
+        </span>
+        <span className="text-lg font-semibold text-fg">{formatBRL(total)}</span>
       </div>
     </div>
   );
@@ -345,34 +375,47 @@ function ProductPicker({
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center">
-      <div className="w-full max-w-md rounded-t-2xl bg-white p-5 sm:rounded-2xl">
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 sm:items-center">
+      <div className="w-full max-w-md rounded-t-lg border border-border bg-surface-2 p-5 shadow-2xl sm:rounded-lg">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Escolher produto</h2>
-          <button onClick={onClose} className="text-zinc-400 hover:text-zinc-600">
-            Fechar
+          <h2 className="text-[14px] font-semibold text-fg">Escolher produto</h2>
+          <button
+            onClick={onClose}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-fg-subtle transition-colors duration-[120ms] hover:bg-surface-3 hover:text-fg"
+            aria-label="Fechar"
+          >
+            <X size={15} strokeWidth={1.5} />
           </button>
         </div>
-        <input
-          autoFocus
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Buscar produto..."
-          className="mb-3 w-full rounded-lg border border-zinc-300 px-3 py-2 outline-none focus:border-indigo-500"
-        />
-        <div className="max-h-80 divide-y divide-zinc-100 overflow-y-auto">
+        <div className="relative mb-3">
+          <Search
+            size={14}
+            strokeWidth={1.5}
+            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-fg-subtle"
+          />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar produto..."
+            className="h-10 w-full rounded-md border border-border bg-surface pl-9 pr-3 text-[13px] text-fg placeholder:text-fg-subtle outline-none transition-colors duration-[120ms] focus:border-highlight"
+          />
+        </div>
+        <div className="max-h-80 divide-y divide-border overflow-y-auto">
           {filtered.map((product) => (
             <button
               key={product.id}
               onClick={() => onPick(product.id)}
-              className="flex w-full items-center justify-between py-3 text-left hover:bg-zinc-50"
+              className="flex w-full items-center justify-between py-3 text-left text-[13px] transition-colors duration-[120ms] hover:text-highlight"
             >
-              <span>{product.name}</span>
-              <span className="text-zinc-500">{formatBRL(product.price)}</span>
+              <span className="text-fg">{product.name}</span>
+              <span className="text-fg-muted">{formatBRL(product.price)}</span>
             </button>
           ))}
           {filtered.length === 0 && (
-            <p className="py-6 text-center text-sm text-zinc-400">Nenhum produto encontrado.</p>
+            <p className="py-6 text-center text-[12px] text-fg-subtle">
+              Nenhum produto encontrado.
+            </p>
           )}
         </div>
       </div>

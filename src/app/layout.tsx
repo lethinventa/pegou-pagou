@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import { ScanLine } from "lucide-react";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -28,17 +29,28 @@ export default function RootLayout({
       lang="pt-BR"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="flex min-h-full flex-col bg-zinc-50 font-sans text-zinc-900">
-        <header className="border-b border-zinc-200 bg-white">
-          <div className="mx-auto flex max-w-5xl items-center justify-between px-6 py-4">
-            <Link href="/" className="text-lg font-bold tracking-tight">
-              Pegou, Pagou
+      <body className="flex min-h-full flex-col bg-background font-sans text-[13px] text-fg">
+        <header className="border-b border-border bg-background">
+          <div className="mx-auto flex h-14 max-w-5xl items-center justify-between px-6">
+            <Link href="/" className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-md border border-border bg-surface text-fg-muted">
+                <ScanLine size={15} strokeWidth={1.5} />
+              </span>
+              <span className="text-[13px] font-semibold tracking-tight text-fg">
+                Pegou, Pagou
+              </span>
             </Link>
-            <nav className="flex gap-5 text-sm font-medium text-zinc-600">
-              <Link href="/resumo" className="hover:text-zinc-900">
+            <nav className="flex items-center gap-1">
+              <Link
+                href="/resumo"
+                className="rounded-md px-3 py-1.5 text-[13px] font-medium text-fg-muted transition-colors duration-[120ms] hover:bg-surface hover:text-fg"
+              >
                 Resumo
               </Link>
-              <Link href="/config" className="hover:text-zinc-900">
+              <Link
+                href="/config"
+                className="rounded-md px-3 py-1.5 text-[13px] font-medium text-fg-muted transition-colors duration-[120ms] hover:bg-surface hover:text-fg"
+              >
                 Configurações
               </Link>
             </nav>

@@ -37,36 +37,55 @@ export default function ResumoPage() {
   const grandTotal = byPerson.reduce((sum, entry) => sum + entry.total, 0);
 
   return (
-    <div className="mx-auto w-full max-w-4xl flex-1 px-6 py-10">
-      <div className="flex items-baseline justify-between">
+    <div className="mx-auto w-full max-w-4xl flex-1 px-6 py-12">
+      <div className="flex items-end justify-between border-b border-border pb-6">
         <div>
-          <h1 className="text-2xl font-semibold">Resumo de {monthLabel}</h1>
-          <p className="mt-1 text-zinc-500">Consumo por pessoa neste mês.</p>
+          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-fg-subtle">
+            Resumo mensal
+          </p>
+          <h1 className="mt-2 text-2xl font-semibold capitalize tracking-tight text-fg">
+            {monthLabel}
+          </h1>
         </div>
-        <p className="text-lg font-semibold">{formatBRL(grandTotal)}</p>
+        <div className="text-right">
+          <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-fg-subtle">
+            Total
+          </p>
+          <p className="mt-1 text-2xl font-semibold text-fg">{formatBRL(grandTotal)}</p>
+        </div>
       </div>
 
-      <div className="mt-8 flex flex-col gap-4">
+      <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2">
         {byPerson.map(({ person, total, items }) => (
-          <div key={person.id} className="rounded-2xl border border-zinc-200 bg-white p-5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">{person.name}</h2>
-              <span className="text-lg font-semibold">{formatBRL(total)}</span>
+          <div key={person.id} className="rounded-lg border border-border bg-surface p-4">
+            <div className="flex items-center justify-between border-b border-border pb-3">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full border border-border-strong bg-surface-2 text-[12px] font-semibold text-fg-muted">
+                  {person.name.charAt(0).toUpperCase()}
+                </span>
+                <h2 className="text-[14px] font-semibold text-fg">{person.name}</h2>
+              </div>
+              <span className="text-[15px] font-semibold text-fg">{formatBRL(total)}</span>
             </div>
-            <ul className="mt-3 space-y-1 text-sm text-zinc-600">
+            <ul className="mt-3 flex flex-col gap-1.5">
               {items.map((item) => (
-                <li key={item.name} className="flex justify-between">
+                <li
+                  key={item.name}
+                  className="flex justify-between text-[12px] text-fg-muted"
+                >
                   <span>
                     {item.qty}x {item.name}
                   </span>
-                  <span>{formatBRL(item.price * item.qty)}</span>
+                  <span className="text-fg-subtle">{formatBRL(item.price * item.qty)}</span>
                 </li>
               ))}
             </ul>
           </div>
         ))}
         {byPerson.length === 0 && (
-          <p className="text-center text-zinc-400">Nenhum consumo registrado neste mês.</p>
+          <p className="col-span-full py-10 text-center text-[13px] text-fg-subtle">
+            Nenhum consumo registrado neste mês.
+          </p>
         )}
       </div>
     </div>

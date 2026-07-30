@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Mic, Search } from "lucide-react";
 import { MOCK_PEOPLE } from "@/lib/mock-data";
 import { findBestPersonMatch } from "@/lib/fuzzy-match";
 
@@ -60,49 +61,63 @@ export default function IdentifyPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-6 py-10">
+    <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-8 px-6 py-12">
       <div className="text-center">
-        <h1 className="text-2xl font-semibold">Quem é você?</h1>
-        <p className="mt-1 text-zinc-500">Toque no seu nome ou use a voz.</p>
+        <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-fg-subtle">
+          Identificação
+        </p>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight text-fg">Quem é você?</h1>
+        <p className="mt-1.5 text-[13px] text-fg-muted">Toque no seu nome ou use a voz.</p>
       </div>
 
       <div className="flex flex-col items-center gap-3">
         <button
           onClick={startVoice}
-          className={`flex h-16 w-16 items-center justify-center rounded-full text-white shadow-lg transition ${
+          className={`relative flex items-center justify-center rounded-full border transition-colors duration-[120ms] ${
             voiceStatus === "listening"
-              ? "animate-pulse bg-red-500"
-              : "bg-indigo-600 hover:bg-indigo-700"
+              ? "border-highlight bg-highlight-dim text-highlight"
+              : "border-border bg-surface text-fg-muted hover:border-border-strong hover:text-fg"
           }`}
+          style={{ height: "4.5rem", width: "4.5rem" }}
           aria-label="Identificar por voz"
         >
-          <MicIcon />
+          {voiceStatus === "listening" && (
+            <span className="absolute inset-0 animate-pulse rounded-full border border-highlight opacity-40" />
+          )}
+          <Mic size={26} strokeWidth={1.5} />
         </button>
         <VoiceHint status={voiceStatus} heard={heard} />
       </div>
 
-      <input
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Buscar nome..."
-        className="w-full rounded-xl border border-zinc-300 px-4 py-3 text-base outline-none focus:border-indigo-500"
-      />
+      <div className="relative">
+        <Search
+          size={15}
+          strokeWidth={1.5}
+          className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-fg-subtle"
+        />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Buscar nome..."
+          className="h-11 w-full rounded-lg border border-border bg-surface pl-10 pr-4 text-[14px] text-fg placeholder:text-fg-subtle outline-none transition-colors duration-[120ms] focus:border-highlight"
+        />
+      </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {filteredPeople.map((person) => (
           <button
             key={person.id}
             onClick={() => selectPerson(person.id)}
-            className="flex h-28 flex-col items-center justify-center gap-2 rounded-2xl border border-zinc-200 bg-white text-lg font-medium shadow-sm transition hover:border-indigo-400 hover:shadow-md active:scale-95"
+            className="flex h-28 flex-col items-center justify-center gap-2.5 rounded-lg border border-border bg-surface text-[15px] font-medium text-fg transition-colors duration-[120ms] hover:border-border-strong hover:bg-surface-2 active:scale-[0.98]"
           >
-            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-indigo-100 text-indigo-700">
+            <span className="flex h-9 w-9 items-center justify-center rounded-full border border-border-strong bg-surface-2 text-[13px] font-semibold text-fg-muted">
               {person.name.charAt(0).toUpperCase()}
             </span>
             {person.name}
           </button>
         ))}
         {filteredPeople.length === 0 && (
-          <p className="col-span-full text-center text-zinc-400">
+          <p className="col-span-full py-8 text-center text-[13px] text-fg-subtle">
             Nenhum nome encontrado.
           </p>
         )}
@@ -112,40 +127,25 @@ export default function IdentifyPage() {
 }
 
 function VoiceHint({ status, heard }: { status: VoiceStatus; heard: string | null }) {
-  if (status === "listening") return <p className="text-sm text-zinc-500">Ouvindo...</p>;
+  if (status === "listening")
+    return <p className="text-[12px] text-fg-muted">Ouvindo...</p>;
   if (status === "not-found")
     return (
-      <p className="text-sm text-amber-600">
+      <p className="text-[12px] text-warning">
         Não entendi &ldquo;{heard}&rdquo;. Toque no seu nome na lista.
       </p>
     );
   if (status === "unsupported")
     return (
-      <p className="text-sm text-zinc-400">
+      <p className="text-[12px] text-fg-subtle">
         Voz não disponível nesse navegador — toque na lista.
       </p>
     );
   if (status === "error")
     return (
-      <p className="text-sm text-amber-600">
+      <p className="text-[12px] text-warning">
         Não consegui usar o microfone — toque na lista.
       </p>
     );
-  return <p className="text-sm text-zinc-400">Diga seu nome</p>;
-}
-
-function MicIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      className="h-7 w-7"
-    >
-      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3Z" />
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2" strokeLinecap="round" />
-      <path d="M12 19v4M8 23h8" strokeLinecap="round" />
-    </svg>
-  );
+  return <p className="text-[12px] text-fg-subtle">Diga seu nome</p>;
 }
