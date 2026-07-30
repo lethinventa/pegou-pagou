@@ -20,7 +20,6 @@ import {
   VolumeX,
   X,
 } from "lucide-react";
-import type { ObjectDetection } from "@tensorflow-models/coco-ssd";
 import { formatBRL } from "@/lib/format";
 import { identifyProduct } from "@/lib/identify-product";
 import { finalizeSession } from "@/lib/actions/sessions";
@@ -35,17 +34,22 @@ import { PersonPickerModal } from "@/components/person-picker-modal";
 import type { CartItem, Person, Product } from "@/lib/types";
 
 // A cota gratuita da Gemini é bem curta (20 req/dia no gemini-3.5-flash). Em vez de
-// perguntar pra ela em loop o dia inteiro, um detector de objetos local (TensorFlow.js
-// + COCO-SSD, roda no navegador, de graça, sem cota) decide se tem algo prominente na
-// frente da câmera — só aí a gente considera identificar de verdade.
+// perguntar pra ela em loop o dia inteiro, um detector de presença local decide se tem
+// algo prominente na frente da câmera — só aí a gente considera identificar de verdade.
+//
+// Isso já foi um detector de objetos (COCO-SSD), mas ele só reconhece 80 classes
+// genéricas (garrafa, xícara, banana...) — nenhuma é "pacote de salgadinho" ou "barra
+// de chocolate", então travava sem nunca detectar presença pra boa parte dos produtos
+// reais. Trocado por subtração de fundo (comparar o quadro atual com um "fundo vazio"
+// que vai se atualizando devagar): não importa a forma do objeto, só que mudou o
+// suficiente de pixels na área central onde o produto deve ficar.
 const DETECTION_INTERVAL_MS = 800;
-const FALLBACK_INTERVAL_MS = 25000; // usado só se o detector local falhar ao carregar
-// O detector (COCO-SSD) só conhece 80 classes genéricas (garrafa, xícara, banana...) —
-// nenhuma é "pacote de salgadinho". Pra objetos fora desse vocabulário ele ainda desenha
-// uma caixa em volta, só que com confiança mais baixa — por isso o threshold é frouxo:
-// não importa qual classe ele "acha" que é, só que tem algo grande e sólido na frente.
-const PRESENCE_SCORE_THRESHOLD = 0.25;
-const PRESENCE_AREA_FRACTION = 0.06;
+const PROBE_WIDTH = 80;
+const PROBE_HEIGHT = 60;
+const MOTION_PIXEL_DIFF_THRESHOLD = 28; // diferença de cinza (0-255) pra contar como "mudou"
+const MOTION_AREA_FRACTION = 0.12; // fração da área central que precisa mudar pra contar como presença
+const CENTRAL_REGION_FRACTION = 0.58; // combina com o guia visual (h-[58%] w-[58%]) na tela
+const BASELINE_ADAPT_RATE = 0.08; // o quão rápido o "fundo vazio" se ajusta quando não há presença
 // Primeiro tenta reconhecer comparando com as fotos de referência do catálogo
 // (MobileNet + similaridade de cosseno, local, de graça). Só chama a Gemini de
 // verdade se a comparação local não bater com confiança suficiente — o número
@@ -68,14 +72,18 @@ const INACTIVITY_CLEAR_COUNTDOWN_S = 30;
 
 type CameraStatus = "starting" | "ready" | "unavailable";
 type ScanState = "scanning" | "identifying" | "awaiting_removal";
-type PresenceModelStatus = "loading" | "ready" | "error";
 
 export function ScanScreen({ people, products }: { people: Person[]; products: Product[] }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanStateRef = useRef<ScanState>("scanning");
-  const modelRef = useRef<ObjectDetection | null>(null);
+  // Canvas offscreen (nunca anexado ao DOM) usado só pra amostrar o vídeo em baixa
+  // resolução — barato o suficiente pra rodar a cada detecção sem pesar no navegador.
+  const probeCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // "Fundo vazio" em tons de cinza (PROBE_WIDTH x PROBE_HEIGHT) pra subtração de fundo.
+  // Null até a primeira amostra; se atualiza devagar só quando não há presença.
+  const baselineRef = useRef<Uint8ClampedArray | null>(null);
   const lastGeminiCallRef = useRef(0);
   // 0 até a primeira atividade real (addToCart sempre grava o valor antes do
   // carrinho deixar de estar vazio, então o efeito de inatividade nunca lê esse 0).
@@ -93,7 +101,6 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   const awaitingRemovalSinceRef = useRef(0);
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("starting");
-  const [presenceModelStatus, setPresenceModelStatus] = useState<PresenceModelStatus>("loading");
   const [visualModelReady, setVisualModelReady] = useState(false);
   const [scanState, setScanState] = useState<ScanState>("scanning");
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -326,30 +333,6 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   useEffect(() => {
     let cancelled = false;
 
-    async function loadModel() {
-      try {
-        const tf = await import("@tensorflow/tfjs");
-        await tf.ready();
-        const cocoSsd = await import("@tensorflow-models/coco-ssd");
-        const model = await cocoSsd.load({ base: "lite_mobilenet_v2" });
-        if (cancelled) return;
-        modelRef.current = model;
-        setPresenceModelStatus("ready");
-      } catch {
-        if (!cancelled) setPresenceModelStatus("error");
-      }
-    }
-
-    loadModel();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
     async function loadAndTrainVisualModel() {
       try {
         await loadVisualModel();
@@ -398,41 +381,71 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     };
   }, []);
 
-  const checkPresence = useCallback(async (): Promise<boolean | null> => {
+  // Subtração de fundo: compara o quadro atual (numa amostra pequena, em cinza) com um
+  // "fundo vazio" que só se atualiza quando NÃO há presença — assim, quando um produto
+  // aparece, ele continua "diferente" do fundo até realmente sair de cena, em vez de
+  // depender de reconhecer a forma/categoria do objeto.
+  const checkPresence = useCallback((): boolean | null => {
     const video = videoRef.current;
-    const model = modelRef.current;
-    if (!video || !model || video.readyState < 2) return null;
+    if (!video || video.readyState < 2 || video.videoWidth === 0) return null;
 
-    const frameArea = video.videoWidth * video.videoHeight;
-    if (frameArea === 0) return null;
+    let probeCanvas = probeCanvasRef.current;
+    if (!probeCanvas) {
+      probeCanvas = document.createElement("canvas");
+      probeCanvas.width = PROBE_WIDTH;
+      probeCanvas.height = PROBE_HEIGHT;
+      probeCanvasRef.current = probeCanvas;
+    }
+    const ctx = probeCanvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return null;
 
-    const predictions = await model.detect(video);
-    return predictions.some((prediction) => {
-      const [, , boxWidth, boxHeight] = prediction.bbox;
-      const areaFraction = (boxWidth * boxHeight) / frameArea;
-      return prediction.score >= PRESENCE_SCORE_THRESHOLD && areaFraction >= PRESENCE_AREA_FRACTION;
-    });
+    ctx.drawImage(video, 0, 0, PROBE_WIDTH, PROBE_HEIGHT);
+    const { data } = ctx.getImageData(0, 0, PROBE_WIDTH, PROBE_HEIGHT);
+
+    const gray = new Uint8ClampedArray(PROBE_WIDTH * PROBE_HEIGHT);
+    for (let i = 0; i < gray.length; i++) {
+      const o = i * 4;
+      gray[i] = (data[o] * 0.299 + data[o + 1] * 0.587 + data[o + 2] * 0.114) | 0;
+    }
+
+    const baseline = baselineRef.current;
+    if (!baseline) {
+      // Primeira amostra: ainda não há fundo pra comparar.
+      baselineRef.current = gray;
+      return null;
+    }
+
+    const marginX = Math.round((PROBE_WIDTH * (1 - CENTRAL_REGION_FRACTION)) / 2);
+    const marginY = Math.round((PROBE_HEIGHT * (1 - CENTRAL_REGION_FRACTION)) / 2);
+
+    let changed = 0;
+    let total = 0;
+    for (let y = marginY; y < PROBE_HEIGHT - marginY; y++) {
+      for (let x = marginX; x < PROBE_WIDTH - marginX; x++) {
+        const idx = y * PROBE_WIDTH + x;
+        total++;
+        if (Math.abs(gray[idx] - baseline[idx]) >= MOTION_PIXEL_DIFF_THRESHOLD) changed++;
+      }
+    }
+
+    const hasPresence = total > 0 && changed / total >= MOTION_AREA_FRACTION;
+
+    if (!hasPresence) {
+      for (let i = 0; i < gray.length; i++) {
+        baseline[i] = baseline[i] + (gray[i] - baseline[i]) * BASELINE_ADAPT_RATE;
+      }
+    }
+
+    return hasPresence;
   }, []);
 
   useEffect(() => {
-    if (cameraStatus !== "ready" || presenceModelStatus === "loading") return;
-
-    const usingLocalGate = presenceModelStatus === "ready";
-    const intervalMs = usingLocalGate ? DETECTION_INTERVAL_MS : FALLBACK_INTERVAL_MS;
+    if (cameraStatus !== "ready") return;
 
     const interval = setInterval(async () => {
       if (scanStateRef.current === "identifying") return;
 
       if (scanStateRef.current === "awaiting_removal") {
-        // Sem detector local disponível: não dá pra saber se foi retirado de
-        // verdade, então cai num tempo fixo degradado como último recurso.
-        if (!usingLocalGate) {
-          if (Date.now() - awaitingRemovalSinceRef.current >= REMOVAL_GRACE_MS) {
-            setScanState("scanning");
-          }
-          return;
-        }
-
         const hasPresence = await checkPresence();
         if (hasPresence) {
           lastPresenceAtRef.current = Date.now();
@@ -443,18 +456,16 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       }
 
       // scanState === "scanning"
-      if (usingLocalGate) {
-        const hasPresence = await checkPresence();
-        if (!hasPresence) return;
-      }
+      const hasPresence = await checkPresence();
+      if (!hasPresence) return;
 
       const frameBase64 = captureFrame();
       const canvas = canvasRef.current;
       if (frameBase64 && canvas) runIdentification(frameBase64, canvas);
-    }, intervalMs);
+    }, DETECTION_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, [cameraStatus, presenceModelStatus, captureFrame, runIdentification, checkPresence]);
+  }, [cameraStatus, captureFrame, runIdentification, checkPresence]);
 
   // Zera o carrinho sozinho se ficar muito tempo parado — evita que a próxima
   // pessoa a usar o kiosk herde sem querer itens de quem esqueceu de concluir.
@@ -565,7 +576,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             {cameraStatus === "unavailable" && (
               <FallbackCapture onFile={handleFallbackPhoto} message={fallbackMessage} />
             )}
-            {cameraStatus === "ready" && presenceModelStatus !== "loading" && scanState === "scanning" && (
+            {cameraStatus === "ready" && scanState === "scanning" && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                 <div className="relative h-[58%] w-[58%] max-w-sm">
                   <span
@@ -601,11 +612,6 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             {cameraStatus === "ready" && scanState === "awaiting_removal" && (
               <StatusBadge tone="success" icon={<Check size={13} strokeWidth={1.5} />}>
                 Produto adicionado. Retire-o da câmera para continuar.
-              </StatusBadge>
-            )}
-            {cameraStatus === "ready" && presenceModelStatus === "loading" && (
-              <StatusBadge tone="highlight" icon={<Sparkles size={13} strokeWidth={1.5} />}>
-                Carregando detector...
               </StatusBadge>
             )}
             {secondsUntilClear !== null && cart.length > 0 && !finishOpen && (
