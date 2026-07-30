@@ -59,12 +59,18 @@ export async function POST(request: Request) {
         }),
       }
     );
-  } catch {
+  } catch (err) {
     // Falha de rede com a Gemini não deve derrubar o kiosk — trata como baixa confiança.
+    console.error("[identify-product] falha de rede chamando Gemini:", err);
     return NextResponse.json({ product_id: null, confidence: "baixa" });
   }
 
   if (!geminiResponse.ok) {
+    const errorBody = await geminiResponse.text().catch(() => "");
+    console.error(
+      `[identify-product] Gemini respondeu ${geminiResponse.status} (modelo: ${model}):`,
+      errorBody
+    );
     return NextResponse.json({ product_id: null, confidence: "baixa" });
   }
 
@@ -74,14 +80,18 @@ export async function POST(request: Request) {
   let parsed: { product_id?: string | null; confidence?: string } | null = null;
   try {
     parsed = typeof text === "string" ? JSON.parse(text) : null;
-  } catch {
+  } catch (err) {
+    console.error("[identify-product] resposta da Gemini não é JSON válido:", text, err);
     parsed = null;
   }
 
   const confidence = parsed?.confidence;
   if (!parsed || !confidence || !CONFIDENCE_VALUES.has(confidence)) {
+    console.error("[identify-product] resposta sem confidence válida:", parsed ?? data);
     return NextResponse.json({ product_id: null, confidence: "baixa" });
   }
+
+  console.log(`[identify-product] confidence=${confidence} product_id=${parsed.product_id ?? "null"}`);
 
   // Nunca confia cegamente no id devolvido pela IA — só aceita se estiver na lista enviada.
   const productId =
