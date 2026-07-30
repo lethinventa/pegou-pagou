@@ -2,10 +2,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowRight,
   Camera,
   Check,
-  ListPlus,
+  CheckCircle2,
+  Clock,
+  HelpCircle,
+  LogOut,
+  ScanSearch,
   Search,
+  ShieldCheck,
   Sparkles,
   Trash2,
   Volume2,
@@ -35,8 +41,8 @@ const PRESENCE_AREA_FRACTION = 0.06;
 const GEMINI_COOLDOWN_MS = 5000; // no máx. 1 chamada real à Gemini a cada 5s
 const LOCK_AFTER_ADD_MS = 4000;
 
-// Carrinho sem dono até o "Concluir": se ficar parado tempo demais, mais vale limpar
-// sozinho do que arriscar misturar o consumo de duas pessoas diferentes na mesma sessão.
+// Carrinho sem dono até o "Finalizar compra": se ficar parado tempo demais, mais vale
+// limpar sozinho do que arriscar misturar o consumo de duas pessoas na mesma sessão.
 const INACTIVITY_WARNING_MS = 3 * 60 * 1000;
 const INACTIVITY_CLEAR_COUNTDOWN_S = 30;
 
@@ -55,6 +61,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   // carrinho deixar de estar vazio, então o efeito de inatividade nunca lê esse 0).
   const lastActivityRef = useRef(0);
   const hasGreetedRef = useRef(false);
+  const sessionStartRef = useRef(0);
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("starting");
   const [modelStatus, setModelStatus] = useState<ModelStatus>("loading");
@@ -64,9 +71,15 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   const [pickerOpen, setPickerOpen] = useState(false);
   const [finishOpen, setFinishOpen] = useState(false);
   const [fallbackMessage, setFallbackMessage] = useState<string | null>(null);
-  const [voiceEnabled, setVoiceEnabledState] = useState(() => isVoiceEnabled());
+  // Mesmo motivo do sessionNumber: ler localStorage direto no useState quebraria a
+  // hidratação pra quem já tinha ligado a voz antes (server sempre acha que é false).
+  const [voiceEnabled, setVoiceEnabledState] = useState(false);
   const [secondsUntilClear, setSecondsUntilClear] = useState<number | null>(null);
   const [confirmation, setConfirmation] = useState<{ name: string; total: number } | null>(null);
+  // null até montar no client — gerar com Math.random() direto no useState quebraria
+  // a hidratação (servidor e client sorteando números diferentes pro mesmo render).
+  const [sessionNumber, setSessionNumber] = useState<number | null>(null);
+  const [sessionSeconds, setSessionSeconds] = useState(0);
 
   useEffect(() => {
     scanStateRef.current = scanState;
@@ -91,6 +104,20 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     }
   }, [cameraStatus]);
 
+  useEffect(() => {
+    sessionStartRef.current = Date.now();
+    // Só dá pra sortear/ler localStorage depois de montar no client — fazer isso
+    // direto no useState quebraria a hidratação (servidor não tem Math.random nem
+    // localStorage reais). Esse é o jeito recomendado pelo React de evitar isso.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSessionNumber(Math.floor(100 + Math.random() * 900));
+    setVoiceEnabledState(isVoiceEnabled());
+    const interval = setInterval(() => {
+      setSessionSeconds(Math.floor((Date.now() - sessionStartRef.current) / 1000));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   const total = useMemo(() => cart.reduce((sum, item) => sum + item.price, 0), [cart]);
 
   const addToCart = useCallback(
@@ -108,7 +135,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
           added_at: new Date().toISOString(),
         },
       ]);
-      setToast(`Adicionado: ${product.name}`);
+      setToast(`Produto reconhecido — adicionado: ${product.name}`);
       speak(`${product.name} adicionado.`);
     },
     [products]
@@ -123,6 +150,25 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
     lastActivityRef.current = Date.now();
     speak("Diga seu nome, ou toque na lista, para concluir.");
     setFinishOpen(true);
+  }
+
+  function resetSession() {
+    sessionStartRef.current = Date.now();
+    setSessionSeconds(0);
+    setSessionNumber(Math.floor(100 + Math.random() * 900));
+  }
+
+  function handleExitSession() {
+    if (cart.length > 0) {
+      const confirmed = window.confirm(
+        "Sair agora descarta os itens dessa sessão sem registrar pra ninguém. Continuar?"
+      );
+      if (!confirmed) return;
+    }
+    lastActivityRef.current = Date.now();
+    setCart([]);
+    setToast(null);
+    resetSession();
   }
 
   function toggleVoice() {
@@ -152,6 +198,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
       setCart([]);
       setFinishOpen(false);
       lastActivityRef.current = Date.now();
+      resetSession();
     } catch {
       setToast("Erro ao registrar a sessão. Tente de novo.");
     }
@@ -326,46 +373,44 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-6 py-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-fg-subtle">
-            Sessão atual
-          </p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight text-fg">
-            Aponte o produto pra câmera
-          </h1>
+    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 px-6 py-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[13px] text-fg-muted">
+          <span className="font-medium text-fg">Sessão #{sessionNumber ?? "—"}</span>
+          <span className="flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-success" />
+            {cart.length} {cart.length === 1 ? "produto" : "produtos"}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Clock size={13} strokeWidth={1.5} />
+            {formatDuration(sessionSeconds)}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={toggleVoice}
-            className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-surface text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
+            className="flex h-8 w-8 items-center justify-center rounded-md border border-border bg-surface text-fg-subtle transition-colors duration-[120ms] hover:border-border-strong hover:text-fg-muted"
             aria-label={voiceEnabled ? "Desligar voz" : "Ligar voz"}
           >
             {voiceEnabled ? (
-              <Volume2 size={15} strokeWidth={1.5} />
+              <Volume2 size={14} strokeWidth={1.5} />
             ) : (
-              <VolumeX size={15} strokeWidth={1.5} />
+              <VolumeX size={14} strokeWidth={1.5} />
             )}
           </button>
-          <div className="flex flex-col items-end gap-1">
-            <button
-              onClick={openFinishModal}
-              disabled={cart.length === 0}
-              className="rounded-md bg-fg px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-fg-subtle"
-            >
-              Concluir
-            </button>
-            {cart.length === 0 && (
-              <span className="text-[11px] text-fg-subtle">Adicione ao menos 1 item</span>
-            )}
-          </div>
+          <button
+            onClick={handleExitSession}
+            className="flex items-center gap-1.5 rounded-md border border-border bg-surface px-3 py-2 text-[13px] font-medium text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
+          >
+            <LogOut size={14} strokeWidth={1.5} />
+            Sair da sessão
+          </button>
         </div>
       </div>
 
-      <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <div className="relative aspect-video overflow-hidden rounded-lg border border-border bg-black">
+      <div className="grid flex-1 grid-cols-1 gap-6 lg:grid-cols-10">
+        <div className="lg:col-span-7">
+          <div className="relative aspect-video overflow-hidden rounded-2xl border border-border bg-black">
             {cameraStatus !== "unavailable" && (
               <video
                 ref={videoRef}
@@ -377,6 +422,13 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             )}
             <canvas ref={canvasRef} className="hidden" />
 
+            {cameraStatus === "ready" && (
+              <div className="absolute left-4 top-4 flex items-center gap-1.5 rounded-full border border-border bg-black/60 px-2.5 py-1 text-[11px] font-medium text-fg-muted backdrop-blur-sm">
+                <span className="h-1.5 w-1.5 rounded-full bg-success" />
+                Câmera ativa
+              </div>
+            )}
+
             {cameraStatus === "starting" && (
               <Overlay>
                 <Camera size={18} strokeWidth={1.5} className="text-fg-muted" />
@@ -386,17 +438,32 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             {cameraStatus === "unavailable" && (
               <FallbackCapture onFile={handleFallbackPhoto} message={fallbackMessage} />
             )}
-            {cameraStatus === "ready" && modelStatus !== "loading" && scanState === "scanning" && (
+            {cameraStatus === "ready" && modelStatus !== "loading" && scanState !== "identifying" && (
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                <div className="relative h-[55%] w-[55%] max-w-xs">
-                  <span className="absolute left-0 top-0 h-8 w-8 rounded-tl-md border-l-2 border-t-2 border-fg/40" />
-                  <span className="absolute right-0 top-0 h-8 w-8 rounded-tr-md border-r-2 border-t-2 border-fg/40" />
-                  <span className="absolute bottom-0 left-0 h-8 w-8 rounded-bl-md border-b-2 border-l-2 border-fg/40" />
-                  <span className="absolute bottom-0 right-0 h-8 w-8 rounded-br-md border-b-2 border-r-2 border-fg/40" />
+                <div className="relative h-[58%] w-[58%] max-w-sm">
+                  <span
+                    className="absolute left-0 top-0 h-9 w-9 rounded-tl-lg border-l-2 border-t-2 border-success"
+                    style={{ filter: "drop-shadow(0 0 6px var(--color-success))" }}
+                  />
+                  <span
+                    className="absolute right-0 top-0 h-9 w-9 rounded-tr-lg border-r-2 border-t-2 border-success"
+                    style={{ filter: "drop-shadow(0 0 6px var(--color-success))" }}
+                  />
+                  <span
+                    className="absolute bottom-0 left-0 h-9 w-9 rounded-bl-lg border-b-2 border-l-2 border-success"
+                    style={{ filter: "drop-shadow(0 0 6px var(--color-success))" }}
+                  />
+                  <span
+                    className="absolute bottom-0 right-0 h-9 w-9 rounded-br-lg border-b-2 border-r-2 border-success"
+                    style={{ filter: "drop-shadow(0 0 6px var(--color-success))" }}
+                  />
                 </div>
-                <p className="absolute bottom-6 left-1/2 -translate-x-1/2 rounded-full border border-border bg-black/60 px-3.5 py-1.5 text-[12px] font-medium text-fg-muted backdrop-blur-sm">
-                  Mostre o produto aqui
-                </p>
+                {scanState === "scanning" && !toast && (
+                  <p className="absolute bottom-5 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full border border-border bg-black/70 px-4 py-2 text-[12px] font-medium text-fg-muted backdrop-blur-sm">
+                    <ScanSearch size={14} strokeWidth={1.5} className="text-success" />
+                    Posicione o produto no centro da área e segure por 1 segundo
+                  </p>
+                )}
               </div>
             )}
             {cameraStatus === "ready" && scanState === "identifying" && (
@@ -406,7 +473,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             )}
             {cameraStatus === "ready" && scanState === "locked" && (
               <StatusBadge tone="success" icon={<Check size={13} strokeWidth={1.5} />}>
-                Adicionado! Pode afastar o produto
+                Produto adicionado ao carrinho
               </StatusBadge>
             )}
             {cameraStatus === "ready" && modelStatus === "loading" && (
@@ -422,7 +489,7 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
                 </p>
                 <button
                   onClick={dismissInactivityWarning}
-                  className="rounded-md bg-fg px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white"
+                  className="rounded-md bg-success px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:brightness-110"
                 >
                   Ainda estou aqui
                 </button>
@@ -431,16 +498,39 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             {toast && <Toast>{toast}</Toast>}
           </div>
 
+          <RecognitionStepper scanState={scanState} />
+
           <button
             onClick={() => setPickerOpen(true)}
-            className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg border border-border bg-surface py-3 text-[14px] font-medium text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
+            className="mt-3 flex w-full items-center justify-between gap-2 rounded-2xl border border-border bg-surface px-4 py-3.5 text-[14px] font-medium text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg"
           >
-            <ListPlus size={16} strokeWidth={1.5} />
-            Escolher da lista
+            <span className="flex items-center gap-2">
+              <Search size={16} strokeWidth={1.5} />
+              Não encontrou? <span className="text-success">Escolher manualmente</span>
+            </span>
+            <ArrowRight size={15} strokeWidth={1.5} />
           </button>
         </div>
 
-        <CartPanel cart={cart} total={total} onRemove={removeFromCart} />
+        <div className="lg:col-span-3">
+          <CartPanel cart={cart} total={total} onRemove={removeFromCart} onFinish={openFinishModal} />
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-surface px-5 py-4">
+        <div className="flex items-start gap-3">
+          <ShieldCheck size={18} strokeWidth={1.5} className="mt-0.5 shrink-0 text-success" />
+          <div>
+            <p className="text-[13px] font-medium text-fg">Boa iluminação ajuda na identificação</p>
+            <p className="text-[12px] text-fg-subtle">
+              Evite luz forte atrás do produto e mantenha a câmera limpa.
+            </p>
+          </div>
+        </div>
+        <button className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-3 py-2 text-[12px] font-medium text-fg-muted transition-colors duration-[120ms] hover:border-border-strong hover:text-fg">
+          <HelpCircle size={14} strokeWidth={1.5} />
+          Precisa de ajuda?
+        </button>
       </div>
 
       {pickerOpen && (
@@ -474,6 +564,12 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   );
 }
 
+function formatDuration(totalSeconds: number): string {
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
 function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -490,6 +586,38 @@ function Overlay({ children }: { children: React.ReactNode }) {
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 text-[13px] text-fg-muted">
       {children}
+    </div>
+  );
+}
+
+function RecognitionStepper({ scanState }: { scanState: ScanState }) {
+  const steps: { key: ScanState; label: string; icon: typeof ScanSearch }[] = [
+    { key: "scanning", label: "Procurando produto", icon: ScanSearch },
+    { key: "identifying", label: "Identificando...", icon: Sparkles },
+    { key: "locked", label: "Pronto!", icon: CheckCircle2 },
+  ];
+
+  return (
+    <div className="mt-4 flex items-center justify-center gap-2.5 rounded-2xl border border-border bg-surface px-4 py-3 sm:gap-4">
+      {steps.map((step, index) => {
+        const isActive = step.key === scanState;
+        const Icon = step.icon;
+        return (
+          <div key={step.key} className="flex items-center gap-2.5 sm:gap-4">
+            <div
+              className={`flex items-center gap-1.5 text-[12px] font-medium sm:text-[13px] ${
+                isActive ? "text-success" : "text-fg-subtle"
+              }`}
+            >
+              <Icon size={15} strokeWidth={1.5} />
+              <span className="whitespace-nowrap">{step.label}</span>
+            </div>
+            {index < steps.length - 1 && (
+              <ArrowRight size={13} strokeWidth={1.5} className="text-fg-subtle" />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -538,7 +666,7 @@ function FinalizeConfirmation({
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
-      <div className="flex flex-col items-center gap-4 rounded-lg border border-success/40 bg-surface-2 px-10 py-8 text-center shadow-2xl">
+      <div className="flex flex-col items-center gap-4 rounded-2xl border border-success/40 bg-surface-2 px-10 py-8 text-center shadow-2xl">
         <span className="flex h-14 w-14 items-center justify-center rounded-full border border-success/40 bg-success-dim text-success">
           <Check size={28} strokeWidth={1.5} />
         </span>
@@ -568,7 +696,7 @@ function FallbackCapture({
     <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 p-6 text-center">
       <Camera size={22} strokeWidth={1.5} className="text-fg-subtle" />
       <p className="text-[13px] text-fg-muted">Câmera indisponível. Tire uma foto do produto.</p>
-      <label className="flex cursor-pointer items-center gap-2 rounded-md bg-fg px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:bg-white">
+      <label className="flex cursor-pointer items-center gap-2 rounded-md bg-success px-4 py-2 text-[13px] font-medium text-black transition-colors duration-[120ms] hover:brightness-110">
         <Camera size={15} strokeWidth={1.5} />
         Tirar foto
         <input
@@ -592,37 +720,45 @@ function CartPanel({
   cart,
   total,
   onRemove,
+  onFinish,
 }: {
   cart: CartItem[];
   total: number;
   onRemove: (id: string) => void;
+  onFinish: () => void;
 }) {
   return (
-    <div className="flex flex-col rounded-lg border border-border bg-surface">
+    <div className="flex h-full flex-col rounded-2xl border border-border bg-surface">
       <div className="flex items-center justify-between border-b border-border px-4 py-3.5">
-        <h2 className="text-[13px] font-semibold text-fg">Carrinho da sessão</h2>
+        <h2 className="text-[14px] font-semibold text-fg">Carrinho</h2>
         {cart.length > 0 && (
-          <span className="rounded-full border border-border-strong bg-surface-2 px-2 py-0.5 text-[11px] font-medium text-fg-muted">
+          <span className="rounded-full bg-success-dim px-2 py-0.5 text-[11px] font-semibold text-success">
             {cart.length}
           </span>
         )}
       </div>
 
-      <div className="flex-1 divide-y divide-border overflow-y-auto">
+      <div className="flex-1 space-y-2 overflow-y-auto p-3">
         {cart.length === 0 && (
-          <p className="px-4 py-10 text-center text-[12px] text-fg-subtle">
+          <p className="px-2 py-10 text-center text-[12px] text-fg-subtle">
             Nenhum item ainda. Mostre um produto para a câmera.
           </p>
         )}
         {cart.map((item) => (
-          <div key={item.id} className="flex items-center justify-between px-4 py-3">
-            <div>
-              <p className="text-[13px] font-medium text-fg">{item.product_name}</p>
-              <p className="text-[12px] text-fg-muted">{formatBRL(item.price)}</p>
+          <div
+            key={item.id}
+            className="flex items-center gap-3 rounded-xl border border-border bg-surface-2 p-2.5"
+          >
+            <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg border border-border-strong bg-surface-3 text-[13px] font-semibold text-fg-muted">
+              {item.product_name.charAt(0).toUpperCase()}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-medium text-fg">{item.product_name}</p>
+              <p className="text-[12px] font-medium text-success">{formatBRL(item.price)}</p>
             </div>
             <button
               onClick={() => onRemove(item.id)}
-              className="flex h-7 w-7 items-center justify-center rounded-md text-fg-subtle transition-colors duration-[120ms] hover:bg-danger-dim hover:text-danger"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-fg-subtle transition-colors duration-[120ms] hover:bg-danger-dim hover:text-danger"
               aria-label={`Remover ${item.product_name}`}
             >
               <Trash2 size={14} strokeWidth={1.5} />
@@ -631,11 +767,29 @@ function CartPanel({
         ))}
       </div>
 
-      <div className="flex items-center justify-between border-t border-border px-4 py-4">
-        <span className="text-[11px] font-medium uppercase tracking-[0.1em] text-fg-subtle">
-          Total
-        </span>
-        <span className="text-lg font-semibold text-fg">{formatBRL(total)}</span>
+      <div className="border-t border-border p-4">
+        <div className="mb-3 flex items-end justify-between">
+          <div>
+            <p className="text-[11px] font-medium uppercase tracking-[0.1em] text-fg-subtle">
+              Total
+            </p>
+            <p className="text-[12px] text-fg-subtle">
+              {cart.length} {cart.length === 1 ? "item" : "itens"}
+            </p>
+          </div>
+          <span className="text-2xl font-semibold text-success">{formatBRL(total)}</span>
+        </div>
+        <button
+          onClick={onFinish}
+          disabled={cart.length === 0}
+          className="flex w-full items-center justify-center gap-2 rounded-xl bg-success py-3.5 text-[14px] font-semibold text-black transition-colors duration-[120ms] hover:brightness-110 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:text-fg-subtle disabled:hover:brightness-100"
+        >
+          <Check size={16} strokeWidth={2} />
+          Finalizar compra
+        </button>
+        {cart.length === 0 && (
+          <p className="mt-2 text-center text-[11px] text-fg-subtle">Adicione ao menos 1 item</p>
+        )}
       </div>
     </div>
   );
@@ -657,7 +811,7 @@ function ProductPicker({
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 sm:items-center">
-      <div className="w-full max-w-md rounded-t-lg border border-border bg-surface-2 p-5 shadow-2xl sm:rounded-lg">
+      <div className="w-full max-w-md rounded-t-2xl border border-border bg-surface-2 p-5 shadow-2xl sm:rounded-2xl">
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-[14px] font-semibold text-fg">Escolher produto</h2>
           <button
