@@ -47,8 +47,8 @@ import type { CartItem, Person, Product, ReferenceImage } from "@/lib/types";
 const DETECTION_INTERVAL_MS = 800;
 const PROBE_WIDTH = 80;
 const PROBE_HEIGHT = 60;
-const MOTION_PIXEL_DIFF_THRESHOLD = 35; // diferença de cinza (0-255) pra contar como "mudou"
-const MOTION_AREA_FRACTION = 0.25; // fração da área central que precisa mudar pra contar como presença
+const MOTION_PIXEL_DIFF_THRESHOLD = 30; // diferença de cinza (0-255) pra contar como "mudou"
+const MOTION_AREA_FRACTION = 0.16; // fração da área central que precisa mudar pra contar como presença
 const CENTRAL_REGION_FRACTION = 0.58; // combina com o guia visual (h-[58%] w-[58%]) na tela
 const BASELINE_ADAPT_RATE = 0.08; // o quão rápido o "fundo vazio" se ajusta quando não há presença
 // Primeiro tenta reconhecer comparando com as fotos de referência do catálogo
