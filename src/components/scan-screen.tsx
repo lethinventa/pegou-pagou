@@ -2,25 +2,38 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Camera, Check, ListPlus, Search, Sparkles, Trash2, X } from "lucide-react";
+import type { ObjectDetection } from "@tensorflow-models/coco-ssd";
 import { formatBRL } from "@/lib/format";
 import { identifyProduct } from "@/lib/identify-product";
 import { finalizeSession } from "@/lib/actions/sessions";
 import { PersonPickerModal } from "@/components/person-picker-modal";
 import type { CartItem, Person, Product } from "@/lib/types";
 
-const SCAN_INTERVAL_MS = 3000;
+// A cota gratuita da Gemini é bem curta (20 req/dia no gemini-3.5-flash). Em vez de
+// perguntar pra ela em loop o dia inteiro, um detector de objetos local (TensorFlow.js
+// + COCO-SSD, roda no navegador, de graça, sem cota) decide se tem algo prominente na
+// frente da câmera — só aí a gente gasta 1 chamada real pra saber QUAL produto é.
+const DETECTION_INTERVAL_MS = 800;
+const FALLBACK_INTERVAL_MS = 25000; // usado só se o detector local falhar ao carregar
+const PRESENCE_SCORE_THRESHOLD = 0.55;
+const PRESENCE_AREA_FRACTION = 0.12; // objeto precisa ocupar uma fração razoável do quadro
+const GEMINI_COOLDOWN_MS = 6000; // no máx. 1 chamada real à Gemini a cada 6s
 const LOCK_AFTER_ADD_MS = 4000;
 
 type CameraStatus = "starting" | "ready" | "unavailable";
 type ScanState = "scanning" | "identifying" | "locked";
+type ModelStatus = "loading" | "ready" | "error";
 
 export function ScanScreen({ people, products }: { people: Person[]; products: Product[] }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanStateRef = useRef<ScanState>("scanning");
+  const modelRef = useRef<ObjectDetection | null>(null);
+  const lastGeminiCallRef = useRef(0);
 
   const [cameraStatus, setCameraStatus] = useState<CameraStatus>("starting");
+  const [modelStatus, setModelStatus] = useState<ModelStatus>("loading");
   const [scanState, setScanState] = useState<ScanState>("scanning");
   const [cart, setCart] = useState<CartItem[]>([]);
   const [toast, setToast] = useState<string | null>(null);
@@ -111,6 +124,30 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   useEffect(() => {
     let cancelled = false;
 
+    async function loadModel() {
+      try {
+        const tf = await import("@tensorflow/tfjs");
+        await tf.ready();
+        const cocoSsd = await import("@tensorflow-models/coco-ssd");
+        const model = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+        if (cancelled) return;
+        modelRef.current = model;
+        setModelStatus("ready");
+      } catch {
+        if (!cancelled) setModelStatus("error");
+      }
+    }
+
+    loadModel();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
     async function startCamera() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -140,16 +177,44 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
   }, []);
 
   useEffect(() => {
-    if (cameraStatus !== "ready") return;
+    if (cameraStatus !== "ready" || modelStatus === "loading") return;
 
-    const interval = setInterval(() => {
+    const usingLocalGate = modelStatus === "ready";
+    const intervalMs = usingLocalGate ? DETECTION_INTERVAL_MS : FALLBACK_INTERVAL_MS;
+
+    const interval = setInterval(async () => {
       if (scanStateRef.current !== "scanning") return;
+
+      if (usingLocalGate) {
+        const video = videoRef.current;
+        const model = modelRef.current;
+        if (!video || !model || video.readyState < 2) return;
+
+        const frameArea = video.videoWidth * video.videoHeight;
+        if (frameArea === 0) return;
+
+        const predictions = await model.detect(video);
+        const hasPresence = predictions.some((prediction) => {
+          const [, , boxWidth, boxHeight] = prediction.bbox;
+          const areaFraction = (boxWidth * boxHeight) / frameArea;
+          return (
+            prediction.score >= PRESENCE_SCORE_THRESHOLD && areaFraction >= PRESENCE_AREA_FRACTION
+          );
+        });
+
+        if (!hasPresence) return;
+      }
+
+      const now = Date.now();
+      if (now - lastGeminiCallRef.current < GEMINI_COOLDOWN_MS) return;
+      lastGeminiCallRef.current = now;
+
       const frame = captureFrame();
       if (frame) runIdentification(frame);
-    }, SCAN_INTERVAL_MS);
+    }, intervalMs);
 
     return () => clearInterval(interval);
-  }, [cameraStatus, captureFrame, runIdentification]);
+  }, [cameraStatus, modelStatus, captureFrame, runIdentification]);
 
   async function handleFallbackPhoto(file: File) {
     setFallbackMessage(null);
@@ -216,6 +281,11 @@ export function ScanScreen({ people, products }: { people: Person[]; products: P
             {cameraStatus === "ready" && scanState === "locked" && (
               <StatusBadge tone="success" icon={<Check size={13} strokeWidth={1.5} />}>
                 Adicionado! Pode afastar o produto
+              </StatusBadge>
+            )}
+            {cameraStatus === "ready" && modelStatus === "loading" && (
+              <StatusBadge tone="highlight" icon={<Sparkles size={13} strokeWidth={1.5} />}>
+                Carregando detector...
               </StatusBadge>
             )}
             {toast && <Toast>{toast}</Toast>}
